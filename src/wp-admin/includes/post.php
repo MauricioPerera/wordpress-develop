@@ -2003,7 +2003,25 @@ function wp_create_post_autosave( $post_data ) {
 		 * @param bool  $is_update    Whether this is an existing autosave.
 		 */
 		do_action( 'wp_creating_autosave', $new_autosave, true );
-		return wp_update_post( $new_autosave );
+
+		// Update the existing autosave in wp_revisions directly.
+		global $wpdb;
+		$wpdb->update(
+			$wpdb->revisions,
+			array(
+				'author_id'      => (int) $new_autosave['post_author'],
+				'title'          => $new_autosave['post_title'] ?? '',
+				'content'        => $new_autosave['post_content'] ?? '',
+				'excerpt'        => $new_autosave['post_excerpt'] ?? '',
+				'created_at'     => current_time( 'mysql' ),
+				'created_at_gmt' => current_time( 'mysql', 1 ),
+			),
+			array( 'id' => $old_autosave->ID ),
+			array( '%d', '%s', '%s', '%s', '%s', '%s' ),
+			array( '%d' )
+		);
+		wp_cache_delete( $old_autosave->ID, 'revisions' );
+		return $old_autosave->ID;
 	}
 
 	// _wp_put_post_revision() expects unescaped.
@@ -2013,9 +2031,10 @@ function wp_create_post_autosave( $post_data ) {
 	$revision = _wp_put_post_revision( $post_data, true );
 
 	if ( ! is_wp_error( $revision ) && 0 !== $revision ) {
+		$revision_obj = _wp_get_revision( $revision );
 
 		/** This action is documented in wp-admin/includes/post.php */
-		do_action( 'wp_creating_autosave', get_post( $revision, ARRAY_A ), false );
+		do_action( 'wp_creating_autosave', $revision_obj ? get_object_vars( $revision_obj ) : array(), false );
 	}
 
 	return $revision;

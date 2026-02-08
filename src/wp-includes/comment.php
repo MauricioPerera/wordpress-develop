@@ -1535,12 +1535,6 @@ function wp_delete_comment( $comment_id, $force_delete = false ) {
 		clean_comment_cache( $children );
 	}
 
-	// Delete metadata.
-	$meta_ids = $wpdb->get_col( $wpdb->prepare( "SELECT meta_id FROM $wpdb->commentmeta WHERE comment_id = %d", $comment->comment_ID ) );
-	foreach ( $meta_ids as $mid ) {
-		delete_metadata_by_mid( 'comment', $mid );
-	}
-
 	if ( ! $wpdb->delete( $wpdb->comments, array( 'comment_ID' => $comment->comment_ID ) ) ) {
 		return false;
 	}
@@ -1628,10 +1622,18 @@ function wp_trash_comment( $comment_id ) {
 	do_action( 'trash_comment', $comment->comment_ID, $comment );
 
 	if ( wp_set_comment_status( $comment, 'trash' ) ) {
-		delete_comment_meta( $comment->comment_ID, '_wp_trash_meta_status' );
-		delete_comment_meta( $comment->comment_ID, '_wp_trash_meta_time' );
-		add_comment_meta( $comment->comment_ID, '_wp_trash_meta_status', $comment->comment_approved );
-		add_comment_meta( $comment->comment_ID, '_wp_trash_meta_time', time() );
+		global $wpdb;
+		$wpdb->update(
+			$wpdb->comments,
+			array(
+				'pre_trash_status' => $comment->comment_approved,
+				'trashed_at'       => current_time( 'mysql' ),
+			),
+			array( 'comment_ID' => $comment->comment_ID ),
+			array( '%s', '%s' ),
+			array( '%d' )
+		);
+		clean_comment_cache( $comment->comment_ID );
 
 		/**
 		 * Fires immediately after a comment is sent to Trash.
@@ -1694,14 +1696,18 @@ function wp_untrash_comment( $comment_id ) {
 	 */
 	do_action( 'untrash_comment', $comment->comment_ID, $comment );
 
-	$status = (string) get_comment_meta( $comment->comment_ID, '_wp_trash_meta_status', true );
+	$status = (string) $comment->pre_trash_status;
 	if ( empty( $status ) ) {
 		$status = '0';
 	}
 
 	if ( wp_set_comment_status( $comment, $status ) ) {
-		delete_comment_meta( $comment->comment_ID, '_wp_trash_meta_time' );
-		delete_comment_meta( $comment->comment_ID, '_wp_trash_meta_status' );
+		global $wpdb;
+		$wpdb->query( $wpdb->prepare(
+			"UPDATE $wpdb->comments SET pre_trash_status = NULL, trashed_at = NULL WHERE comment_ID = %d",
+			$comment->comment_ID
+		) );
+		clean_comment_cache( $comment->comment_ID );
 
 		/**
 		 * Fires immediately after a comment is restored from the Trash.
@@ -1746,10 +1752,18 @@ function wp_spam_comment( $comment_id ) {
 	do_action( 'spam_comment', $comment->comment_ID, $comment );
 
 	if ( wp_set_comment_status( $comment, 'spam' ) ) {
-		delete_comment_meta( $comment->comment_ID, '_wp_trash_meta_status' );
-		delete_comment_meta( $comment->comment_ID, '_wp_trash_meta_time' );
-		add_comment_meta( $comment->comment_ID, '_wp_trash_meta_status', $comment->comment_approved );
-		add_comment_meta( $comment->comment_ID, '_wp_trash_meta_time', time() );
+		global $wpdb;
+		$wpdb->update(
+			$wpdb->comments,
+			array(
+				'pre_trash_status' => $comment->comment_approved,
+				'trashed_at'       => current_time( 'mysql' ),
+			),
+			array( 'comment_ID' => $comment->comment_ID ),
+			array( '%s', '%s' ),
+			array( '%d' )
+		);
+		clean_comment_cache( $comment->comment_ID );
 
 		/**
 		 * Fires immediately after a comment is marked as Spam.
@@ -1793,14 +1807,18 @@ function wp_unspam_comment( $comment_id ) {
 	 */
 	do_action( 'unspam_comment', $comment->comment_ID, $comment );
 
-	$status = (string) get_comment_meta( $comment->comment_ID, '_wp_trash_meta_status', true );
+	$status = (string) $comment->pre_trash_status;
 	if ( empty( $status ) ) {
 		$status = '0';
 	}
 
 	if ( wp_set_comment_status( $comment, $status ) ) {
-		delete_comment_meta( $comment->comment_ID, '_wp_trash_meta_status' );
-		delete_comment_meta( $comment->comment_ID, '_wp_trash_meta_time' );
+		global $wpdb;
+		$wpdb->query( $wpdb->prepare(
+			"UPDATE $wpdb->comments SET pre_trash_status = NULL, trashed_at = NULL WHERE comment_ID = %d",
+			$comment->comment_ID
+		) );
+		clean_comment_cache( $comment->comment_ID );
 
 		/**
 		 * Fires immediately after a comment is unmarked as Spam.
@@ -3092,52 +3110,8 @@ function do_all_trackbacks() {
  * @return void|false Returns false on failure.
  */
 function do_trackbacks( $post ) {
-	global $wpdb;
-
-	$post = get_post( $post );
-
-	if ( ! $post ) {
-		return false;
-	}
-
-	$to_ping = get_to_ping( $post );
-	$pinged  = get_pung( $post );
-
-	if ( empty( $to_ping ) ) {
-		$wpdb->update( $wpdb->posts, array( 'to_ping' => '' ), array( 'ID' => $post->ID ) );
-		return;
-	}
-
-	if ( empty( $post->post_excerpt ) ) {
-		/** This filter is documented in wp-includes/post-template.php */
-		$excerpt = apply_filters( 'the_content', $post->post_content, $post->ID );
-	} else {
-		/** This filter is documented in wp-includes/post-template.php */
-		$excerpt = apply_filters( 'the_excerpt', $post->post_excerpt );
-	}
-
-	$excerpt = str_replace( ']]>', ']]&gt;', $excerpt );
-	$excerpt = wp_html_excerpt( $excerpt, 252, '&#8230;' );
-
-	/** This filter is documented in wp-includes/post-template.php */
-	$post_title = apply_filters( 'the_title', $post->post_title, $post->ID );
-	$post_title = strip_tags( $post_title );
-
-	foreach ( (array) $to_ping as $tb_ping ) {
-		$tb_ping = trim( $tb_ping );
-		if ( ! in_array( $tb_ping, $pinged, true ) ) {
-			trackback( $tb_ping, $post_title, $excerpt, $post->ID );
-			$pinged[] = $tb_ping;
-		} else {
-			$wpdb->query(
-				$wpdb->prepare(
-					"UPDATE $wpdb->posts SET to_ping = TRIM(REPLACE(to_ping, %s, '')) WHERE ID = %d",
-					$tb_ping,
-					$post->ID
-				)
-			);
-		}
-	}
+	// Trackback/pingback columns removed in 7.0. No-op for backward compatibility.
+	return;
 }
 
 /**
@@ -3316,29 +3290,8 @@ function privacy_ping_filter( $sites ) {
  * @return int|false|void Database query from update.
  */
 function trackback( $trackback_url, $title, $excerpt, $post_id ) {
-	global $wpdb;
-
-	if ( empty( $trackback_url ) ) {
-		return;
-	}
-
-	$options            = array();
-	$options['timeout'] = 10;
-	$options['body']    = array(
-		'title'     => $title,
-		'url'       => get_permalink( $post_id ),
-		'blog_name' => get_option( 'blogname' ),
-		'excerpt'   => $excerpt,
-	);
-
-	$response = wp_safe_remote_post( $trackback_url, $options );
-
-	if ( is_wp_error( $response ) ) {
-		return;
-	}
-
-	$wpdb->query( $wpdb->prepare( "UPDATE $wpdb->posts SET pinged = CONCAT(pinged, '\n', %s) WHERE ID = %d", $trackback_url, $post_id ) );
-	return $wpdb->query( $wpdb->prepare( "UPDATE $wpdb->posts SET to_ping = TRIM(REPLACE(to_ping, %s, '')) WHERE ID = %d", $trackback_url, $post_id ) );
+	// Trackback/pingback columns removed in 7.0. No-op for backward compatibility.
+	return 0;
 }
 
 /**
@@ -4083,7 +4036,7 @@ function _wp_batch_update_comment_type() {
 	$lock_name = 'update_comment_type.lock';
 
 	// Try to lock.
-	$lock_result = $wpdb->query( $wpdb->prepare( "INSERT IGNORE INTO `$wpdb->options` ( `option_name`, `option_value`, `autoload` ) VALUES (%s, %s, 'no') /* LOCK */", $lock_name, time() ) );
+	$lock_result = $wpdb->query( $wpdb->prepare( "INSERT IGNORE INTO `$wpdb->settings` ( `name`, `value` ) VALUES (%s, %s) /* LOCK */", $lock_name, time() ) );
 
 	if ( ! $lock_result ) {
 		$lock_result = get_option( $lock_name );

@@ -5542,7 +5542,7 @@ function attachment_url_to_postid( $url ) {
 	}
 
 	$sql = $wpdb->prepare(
-		"SELECT post_id, meta_value FROM $wpdb->postmeta WHERE meta_key = '_wp_attached_file' AND meta_value = %s",
+		"SELECT post_id, file_path FROM $wpdb->attachment_data WHERE file_path = %s",
 		$path
 	);
 
@@ -5555,7 +5555,7 @@ function attachment_url_to_postid( $url ) {
 
 		if ( count( $results ) > 1 ) {
 			foreach ( $results as $result ) {
-				if ( $path === $result->meta_value ) {
+				if ( $path === $result->file_path ) {
 					$post_id = $result->post_id;
 					break;
 				}

@@ -12,8 +12,6 @@
  *
  * @since 3.5.0
  *
- * @property string $page_template
- *
  * @property-read int[]    $ancestors
  * @property-read int[]    $post_category
  * @property-read string[] $tags_input
@@ -210,6 +208,26 @@ final class WP_Post {
 	public $comment_count = '0';
 
 	/**
+	 * Featured image (thumbnail) post ID.
+	 *
+	 * Promoted from postmeta key '_thumbnail_id' to a direct column.
+	 *
+	 * @since 7.0.0
+	 * @var int|null
+	 */
+	public $thumbnail_id = null;
+
+	/**
+	 * Page template filename.
+	 *
+	 * Promoted from postmeta key '_wp_page_template' to a direct column.
+	 *
+	 * @since 7.0.0
+	 * @var string
+	 */
+	public $page_template = '';
+
+	/**
 	 * Stores the post object's sanitization level.
 	 *
 	 * Does not correspond to a DB field.
@@ -305,8 +323,8 @@ final class WP_Post {
 	 * @return mixed
 	 */
 	public function __get( $key ) {
-		if ( 'page_template' === $key && $this->__isset( $key ) ) {
-			return get_post_meta( $this->ID, '_wp_page_template', true );
+		if ( 'page_template' === $key ) {
+			return $this->page_template;
 		}
 
 		if ( 'post_category' === $key ) {

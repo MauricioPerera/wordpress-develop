@@ -226,7 +226,7 @@ class WP_Customize_Nav_Menu_Item_Setting extends WP_Customize_Setting {
 
 			// Note that an ID of less than one indicates a nav_menu not yet inserted.
 			if ( $this->post_id > 0 ) {
-				$post = get_post( $this->post_id );
+				$post = _wp_get_menu_item( $this->post_id );
 				if ( $post && self::POST_TYPE === $post->post_type ) {
 					$is_title_empty = empty( $post->post_title );
 					$value          = (array) wp_setup_nav_menu_item( $post );
@@ -365,18 +365,7 @@ class WP_Customize_Nav_Menu_Item_Setting extends WP_Customize_Setting {
 		}
 
 		if ( ! isset( $this->value['nav_menu_term_id'] ) && $this->post_id > 0 ) {
-			$menus = wp_get_post_terms(
-				$this->post_id,
-				WP_Customize_Nav_Menu_Setting::TAXONOMY,
-				array(
-					'fields' => 'ids',
-				)
-			);
-			if ( ! empty( $menus ) ) {
-				$this->value['nav_menu_term_id'] = array_shift( $menus );
-			} else {
-				$this->value['nav_menu_term_id'] = 0;
-			}
+			$this->value['nav_menu_term_id'] = _wp_get_menu_id_for_item( $this->post_id );
 		}
 
 		foreach ( array( 'object_id', 'menu_item_parent', 'nav_menu_term_id' ) as $key ) {
@@ -786,7 +775,7 @@ class WP_Customize_Nav_Menu_Item_Setting extends WP_Customize_Setting {
 			if ( $is_placeholder ) {
 				$this->update_status = 'deleted';
 			} else {
-				$r = wp_delete_post( $this->post_id, true );
+				$r = _wp_delete_menu_item( $this->post_id );
 
 				if ( false === $r ) {
 					$this->update_error  = new WP_Error( 'delete_failure' );

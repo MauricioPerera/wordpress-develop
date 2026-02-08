@@ -921,7 +921,7 @@ class WP_Comments_List_Table extends WP_List_Table {
 			} elseif ( ( 'untrash' === $action && 'trash' === $the_comment_status )
 				|| ( 'unspam' === $action && 'spam' === $the_comment_status )
 			) {
-				if ( '1' === get_comment_meta( $comment->comment_ID, '_wp_trash_meta_status', true ) ) {
+				if ( '1' === $comment->pre_trash_status ) {
 					$action .= ' approve';
 				} else {
 					$action .= ' unapprove';

@@ -94,7 +94,7 @@ switch ( $action ) {
 			break;
 		}
 
-		if ( ! current_user_can( 'read_post', $revision->ID ) || ! current_user_can( 'edit_post', $revision->post_parent ) ) {
+		if ( ! current_user_can( 'edit_post', $revision->post_parent ) ) {
 			break;
 		}
 

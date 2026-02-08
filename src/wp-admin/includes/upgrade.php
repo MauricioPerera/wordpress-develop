@@ -188,23 +188,17 @@ if ( ! function_exists( 'wp_install_defaults' ) ) :
 		$wpdb->insert(
 			$wpdb->terms,
 			array(
-				'term_id'    => $cat_id,
-				'name'       => $cat_name,
-				'slug'       => $cat_slug,
-				'term_group' => 0,
-			)
-		);
-		$wpdb->insert(
-			$wpdb->term_taxonomy,
-			array(
 				'term_id'     => $cat_id,
+				'name'        => $cat_name,
+				'slug'        => $cat_slug,
+				'term_group'  => 0,
 				'taxonomy'    => 'category',
 				'description' => '',
 				'parent'      => 0,
 				'count'       => 1,
 			)
 		);
-		$cat_tt_id = $wpdb->insert_id;
+		$cat_tt_id = $cat_id;
 
 		// First post.
 		$now             = current_time( 'mysql' );
@@ -264,8 +258,8 @@ if ( ! function_exists( 'wp_install_defaults' ) ) :
 		$wpdb->insert(
 			$wpdb->term_relationships,
 			array(
-				'term_taxonomy_id' => $cat_tt_id,
-				'object_id'        => 1,
+				'term_id'   => $cat_tt_id,
+				'object_id' => 1,
 			)
 		);
 
@@ -459,7 +453,7 @@ Commenter avatars come from <a href="%s">Gravatar</a>.'
 			$wp_rewrite->flush_rules();
 
 			$user = new WP_User( $user_id );
-			$wpdb->update( $wpdb->options, array( 'option_value' => $user->user_email ), array( 'option_name' => 'admin_email' ) );
+			$wpdb->update( $wpdb->settings, array( 'value' => $user->user_email ), array( 'name' => 'admin_email' ) );
 
 			// Remove all perms except for the login user.
 			$wpdb->query( $wpdb->prepare( "DELETE FROM $wpdb->usermeta WHERE user_id != %d AND meta_key = %s", $user_id, $table_prefix . 'user_level' ) );
@@ -2844,7 +2838,7 @@ function __get_option( $setting ) { // phpcs:ignore WordPress.NamingConventions.
 		return untrailingslashit( WP_SITEURL );
 	}
 
-	$option = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM $wpdb->options WHERE option_name = %s", $setting ) );
+	$option = $wpdb->get_var( $wpdb->prepare( "SELECT value FROM $wpdb->settings WHERE name = %s", $setting ) );
 
 	if ( 'home' === $setting && ! $option ) {
 		return __get_option( 'siteurl' );

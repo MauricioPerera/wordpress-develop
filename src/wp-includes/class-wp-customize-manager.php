@@ -3625,19 +3625,15 @@ final class WP_Customize_Manager {
 		$revisions = wp_get_post_revisions( $changeset_post_id, array( 'check_enabled' => false ) );
 		foreach ( $revisions as $revision ) {
 			if ( str_contains( $revision->post_name, "{$changeset_post_id}-autosave" ) ) {
-				$wpdb->update(
-					$wpdb->posts,
-					array(
-						'post_status' => 'auto-draft',
-						'post_type'   => 'customize_changeset',
-						'post_name'   => wp_generate_uuid4(),
-						'post_parent' => 0,
-					),
-					array(
-						'ID' => $revision->ID,
-					)
-				);
-				clean_post_cache( $revision->ID );
+				// Create a new auto-draft changeset from the autosave revision data.
+				wp_insert_post( array(
+					'post_status'  => 'auto-draft',
+					'post_type'    => 'customize_changeset',
+					'post_name'    => wp_generate_uuid4(),
+					'post_content' => $revision->post_content,
+					'post_author'  => $revision->post_author,
+				) );
+				wp_delete_post_revision( $revision->ID );
 			}
 		}
 

@@ -455,7 +455,7 @@ class WP_Term_Query {
 
 		if ( $taxonomies ) {
 			$this->sql_clauses['where']['taxonomy'] =
-				"tt.taxonomy IN ('" . implode( "', '", array_map( 'esc_sql', $taxonomies ) ) . "')";
+				"t.taxonomy IN ('" . implode( "', '", array_map( 'esc_sql', $taxonomies ) ) . "')";
 		}
 
 		if ( empty( $args['exclude'] ) ) {
@@ -573,7 +573,7 @@ class WP_Term_Query {
 		if ( ! empty( $args['term_taxonomy_id'] ) ) {
 			$tt_ids = implode( ',', $args['term_taxonomy_id'] );
 
-			$this->sql_clauses['where']['term_taxonomy_id'] = "tt.term_taxonomy_id IN ({$tt_ids})";
+			$this->sql_clauses['where']['term_taxonomy_id'] = "t.term_id IN ({$tt_ids})";
 		}
 
 		if ( ! empty( $args['name__like'] ) ) {
@@ -585,7 +585,7 @@ class WP_Term_Query {
 
 		if ( ! empty( $args['description__like'] ) ) {
 			$this->sql_clauses['where']['description__like'] = $wpdb->prepare(
-				'tt.description LIKE %s',
+				't.description LIKE %s',
 				'%' . $wpdb->esc_like( $args['description__like'] ) . '%'
 			);
 		}
@@ -612,7 +612,7 @@ class WP_Term_Query {
 
 		if ( '' !== $parent ) {
 			$parent                               = (int) $parent;
-			$this->sql_clauses['where']['parent'] = "tt.parent = '$parent'";
+			$this->sql_clauses['where']['parent'] = "t.parent = '$parent'";
 		}
 
 		$hierarchical = $args['hierarchical'];
@@ -620,7 +620,7 @@ class WP_Term_Query {
 			$hierarchical = false;
 		}
 		if ( $args['hide_empty'] && ! $hierarchical ) {
-			$this->sql_clauses['where']['count'] = 'tt.count > 0';
+			$this->sql_clauses['where']['count'] = 't.count > 0';
 		}
 
 		$number = $args['number'];
@@ -695,10 +695,8 @@ class WP_Term_Query {
 		 */
 		$fields = implode( ', ', apply_filters( 'get_terms_fields', $selects, $args, $taxonomies ) );
 
-		$join .= " INNER JOIN $wpdb->term_taxonomy AS tt ON t.term_id = tt.term_id";
-
 		if ( ! empty( $this->query_vars['object_ids'] ) ) {
-			$join    .= " INNER JOIN {$wpdb->term_relationships} AS tr ON tr.term_taxonomy_id = tt.term_taxonomy_id";
+			$join    .= " INNER JOIN {$wpdb->term_relationships} AS tr ON tr.term_id = t.term_id";
 			$distinct = 'DISTINCT';
 		}
 
@@ -923,8 +921,10 @@ class WP_Term_Query {
 
 		if ( in_array( $_orderby, array( 'term_id', 'name', 'slug', 'term_group' ), true ) ) {
 			$orderby = "t.$_orderby";
-		} elseif ( in_array( $_orderby, array( 'count', 'parent', 'taxonomy', 'term_taxonomy_id', 'description' ), true ) ) {
-			$orderby = "tt.$_orderby";
+		} elseif ( in_array( $_orderby, array( 'count', 'parent', 'taxonomy', 'description' ), true ) ) {
+			$orderby = "t.$_orderby";
+		} elseif ( 'term_taxonomy_id' === $_orderby ) {
+			$orderby = 't.term_id';
 		} elseif ( 'term_order' === $_orderby ) {
 			$orderby = 'tr.term_order';
 		} elseif ( 'include' === $_orderby && ! empty( $this->query_vars['include'] ) ) {

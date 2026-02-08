@@ -1787,9 +1787,9 @@ function is_blog_installed() {
 		$alloptions = wp_load_alloptions();
 	}
 
-	// If siteurl is not set to autoload, check it specifically.
+	// All settings are always loaded, but check DB directly as fallback.
 	if ( ! isset( $alloptions['siteurl'] ) ) {
-		$installed = $wpdb->get_var( "SELECT option_value FROM $wpdb->options WHERE option_name = 'siteurl'" );
+		$installed = $wpdb->get_var( "SELECT value FROM $wpdb->settings WHERE name = 'siteurl'" );
 	} else {
 		$installed = $alloptions['siteurl'];
 	}
@@ -6866,19 +6866,26 @@ function wp_scheduled_delete() {
 		}
 	}
 
-	$comments_to_delete = $wpdb->get_results( $wpdb->prepare( "SELECT comment_id FROM $wpdb->commentmeta WHERE meta_key = '_wp_trash_meta_time' AND meta_value < %d", $delete_timestamp ), ARRAY_A );
+	$comments_to_delete = $wpdb->get_results( $wpdb->prepare(
+		"SELECT comment_ID FROM $wpdb->comments WHERE trashed_at IS NOT NULL AND trashed_at < %s",
+		gmdate( 'Y-m-d H:i:s', $delete_timestamp )
+	), ARRAY_A );
 
 	foreach ( (array) $comments_to_delete as $comment ) {
-		$comment_id = (int) $comment['comment_id'];
+		$comment_id = (int) $comment['comment_ID'];
 		if ( ! $comment_id ) {
 			continue;
 		}
 
 		$del_comment = get_comment( $comment_id );
 
-		if ( ! $del_comment || 'trash' !== $del_comment->comment_approved ) {
-			delete_comment_meta( $comment_id, '_wp_trash_meta_time' );
-			delete_comment_meta( $comment_id, '_wp_trash_meta_status' );
+		if ( ! $del_comment || ! in_array( $del_comment->comment_approved, array( 'trash', 'spam' ), true ) ) {
+			// Clear stale trash data.
+			$wpdb->query( $wpdb->prepare(
+				"UPDATE $wpdb->comments SET pre_trash_status = NULL, trashed_at = NULL WHERE comment_ID = %d",
+				$comment_id
+			) );
+			clean_comment_cache( $comment_id );
 		} else {
 			wp_delete_comment( $del_comment );
 		}

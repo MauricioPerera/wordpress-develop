@@ -544,6 +544,69 @@ class WP_Meta_Query {
 			$clause['compare'] = isset( $clause['value'] ) && is_array( $clause['value'] ) ? 'IN' : '=';
 		}
 
+		// Promoted post meta keys: query wp_posts column directly, no JOIN needed.
+		if ( $this->meta_table === $wpdb->postmeta
+			&& isset( $clause['key'] ) && is_string( $clause['key'] )
+		) {
+			$promoted_column = _wp_promoted_post_meta_column( $clause['key'] );
+			if ( $promoted_column ) {
+				$col_ref = "{$this->primary_table}.{$promoted_column}";
+
+				// Ensure clause_key is unique.
+				if ( is_int( $clause_key ) || ! $clause_key ) {
+					$clause_key = 'promoted_' . $promoted_column;
+				}
+				$iterator        = 1;
+				$clause_key_base = $clause_key;
+				while ( isset( $this->clauses[ $clause_key ] ) ) {
+					$clause_key = $clause_key_base . '-' . $iterator;
+					++$iterator;
+				}
+
+				$clause['alias'] = $this->primary_table;
+				$clause['cast']  = 'CHAR';
+				$this->clauses[ $clause_key ] =& $clause;
+
+				$meta_compare = $clause['compare'];
+
+				if ( 'EXISTS' === $meta_compare || 'NOT EXISTS' === $meta_compare ) {
+					if ( 'EXISTS' === $meta_compare ) {
+						// thumbnail_id is nullable: EXISTS means NOT NULL. page_template always exists.
+						if ( 'thumbnail_id' === $promoted_column ) {
+							$sql_chunks['where'][] = "$col_ref IS NOT NULL";
+						}
+						// For page_template: always exists, no WHERE needed.
+					} else {
+						if ( 'thumbnail_id' === $promoted_column ) {
+							$sql_chunks['where'][] = "$col_ref IS NULL";
+						} else {
+							$sql_chunks['where'][] = "$col_ref = ''";
+						}
+					}
+				} elseif ( array_key_exists( 'value', $clause ) ) {
+					$meta_value = $clause['value'];
+
+					if ( in_array( $meta_compare, array( 'IN', 'NOT IN' ), true ) ) {
+						if ( ! is_array( $meta_value ) ) {
+							$meta_value = preg_split( '/[,\s]+/', $meta_value );
+						}
+						$placeholders = substr( str_repeat( ',%s', count( $meta_value ) ), 1 );
+						$where = $wpdb->prepare( "$col_ref {$meta_compare} ($placeholders)", $meta_value ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+					} elseif ( in_array( $meta_compare, array( 'BETWEEN', 'NOT BETWEEN' ), true ) ) {
+						$where = $wpdb->prepare( "$col_ref {$meta_compare} %s AND %s", $meta_value[0], $meta_value[1] ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+					} elseif ( in_array( $meta_compare, array( 'LIKE', 'NOT LIKE' ), true ) ) {
+						$where = $wpdb->prepare( "$col_ref {$meta_compare} %s", '%' . $wpdb->esc_like( $meta_value ) . '%' ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+					} else {
+						$where = $wpdb->prepare( "$col_ref {$meta_compare} %s", $meta_value ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+					}
+
+					$sql_chunks['where'][] = $where;
+				}
+
+				return $sql_chunks;
+			}
+		}
+
 		$non_numeric_operators = array(
 			'=',
 			'!=',

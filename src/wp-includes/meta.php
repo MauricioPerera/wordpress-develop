@@ -63,6 +63,53 @@ function add_metadata( $meta_type, $object_id, $meta_key, $meta_value, $unique =
 	$meta_value = wp_unslash( $meta_value );
 	$meta_value = sanitize_meta( $meta_key, $meta_value, $meta_type, $meta_subtype );
 
+	// Attachment meta key interception: write to wp_attachment_data instead of wp_postmeta.
+	if ( 'post' === $meta_type ) {
+		$att_column = _wp_attachment_meta_column( $meta_key );
+		if ( $att_column ) {
+			$post = get_post( $object_id );
+			if ( $post && 'attachment' === $post->post_type ) {
+				$db_value = $meta_value;
+				if ( 'metadata' === $att_column ) {
+					$db_value = wp_json_encode( $db_value );
+				}
+
+				$wpdb->query( $wpdb->prepare(
+					"INSERT INTO $wpdb->attachment_data (post_id, `$att_column`) VALUES (%d, %s)
+					ON DUPLICATE KEY UPDATE `$att_column` = VALUES(`$att_column`)",
+					$object_id,
+					$db_value
+				) );
+
+				wp_cache_delete( $object_id, 'attachment_data' );
+
+				do_action( "add_{$meta_type}_meta", $object_id, $meta_key, $meta_value );
+				do_action( "added_{$meta_type}_meta", 0, $object_id, $meta_key, $meta_value );
+
+				return true;
+			}
+		}
+	}
+
+	// Promoted post meta interception: write to wp_posts column instead of wp_postmeta.
+	if ( 'post' === $meta_type ) {
+		$promoted_column = _wp_promoted_post_meta_column( $meta_key );
+		if ( $promoted_column ) {
+			$wpdb->update(
+				$wpdb->posts,
+				array( $promoted_column => $meta_value ),
+				array( 'ID' => $object_id )
+			);
+
+			clean_post_cache( $object_id );
+
+			do_action( "add_{$meta_type}_meta", $object_id, $meta_key, $meta_value );
+			do_action( "added_{$meta_type}_meta", 0, $object_id, $meta_key, $meta_value );
+
+			return true;
+		}
+	}
+
 	/**
 	 * Short-circuits adding metadata of a specific type.
 	 *
@@ -221,6 +268,53 @@ function update_metadata( $meta_type, $object_id, $meta_key, $meta_value, $prev_
 	$passed_value = $meta_value;
 	$meta_value   = wp_unslash( $meta_value );
 	$meta_value   = sanitize_meta( $meta_key, $meta_value, $meta_type, $meta_subtype );
+
+	// Attachment meta key interception: write to wp_attachment_data instead of wp_postmeta.
+	if ( 'post' === $meta_type ) {
+		$att_column = _wp_attachment_meta_column( $meta_key );
+		if ( $att_column ) {
+			$post = get_post( $object_id );
+			if ( $post && 'attachment' === $post->post_type ) {
+				$db_value = $meta_value;
+				if ( 'metadata' === $att_column ) {
+					$db_value = wp_json_encode( $db_value );
+				}
+
+				$wpdb->query( $wpdb->prepare(
+					"INSERT INTO $wpdb->attachment_data (post_id, `$att_column`) VALUES (%d, %s)
+					ON DUPLICATE KEY UPDATE `$att_column` = VALUES(`$att_column`)",
+					$object_id,
+					$db_value
+				) );
+
+				wp_cache_delete( $object_id, 'attachment_data' );
+
+				do_action( "update_{$meta_type}_meta", 0, $object_id, $meta_key, $meta_value );
+				do_action( "updated_{$meta_type}_meta", 0, $object_id, $meta_key, $meta_value );
+
+				return true;
+			}
+		}
+	}
+
+	// Promoted post meta interception: write to wp_posts column instead of wp_postmeta.
+	if ( 'post' === $meta_type ) {
+		$promoted_column = _wp_promoted_post_meta_column( $meta_key );
+		if ( $promoted_column ) {
+			$wpdb->update(
+				$wpdb->posts,
+				array( $promoted_column => $meta_value ),
+				array( 'ID' => $object_id )
+			);
+
+			clean_post_cache( $object_id );
+
+			do_action( "update_{$meta_type}_meta", 0, $object_id, $meta_key, $meta_value );
+			do_action( "updated_{$meta_type}_meta", 0, $object_id, $meta_key, $meta_value );
+
+			return true;
+		}
+	}
 
 	/**
 	 * Short-circuits updating metadata of a specific type.
@@ -419,6 +513,73 @@ function delete_metadata( $meta_type, $object_id, $meta_key, $meta_value = '', $
 	// expected_slashed ($meta_key)
 	$meta_key   = wp_unslash( $meta_key );
 	$meta_value = wp_unslash( $meta_value );
+
+	// Promoted post meta interception: handle delete_all case (e.g., clearing thumbnail references when deleting a post).
+	if ( 'post' === $meta_type && $delete_all ) {
+		$promoted_column = _wp_promoted_post_meta_column( $meta_key );
+		if ( $promoted_column ) {
+			$default = ( 'thumbnail_id' === $promoted_column ) ? null : '';
+			$where   = array();
+			if ( '' !== $meta_value && false !== $meta_value && null !== $meta_value ) {
+				$where[ $promoted_column ] = $meta_value;
+			}
+
+			if ( ! empty( $where ) ) {
+				$wpdb->update(
+					$wpdb->posts,
+					array( $promoted_column => $default ),
+					$where
+				);
+			} else {
+				$wpdb->query( "UPDATE $wpdb->posts SET `$promoted_column` = " . ( null === $default ? 'NULL' : "''" ) );
+			}
+
+			wp_cache_flush_group( 'posts' );
+
+			return true;
+		}
+	}
+
+	// Attachment meta key interception: reset column in wp_attachment_data instead of deleting from wp_postmeta.
+	if ( 'post' === $meta_type && ! $delete_all ) {
+		$att_column = _wp_attachment_meta_column( $meta_key );
+		if ( $att_column ) {
+			$post = get_post( $object_id );
+			if ( $post && 'attachment' === $post->post_type ) {
+				$default = ( 'metadata' === $att_column ) ? null : '';
+				$wpdb->update(
+					$wpdb->attachment_data,
+					array( $att_column => $default ),
+					array( 'post_id' => $object_id )
+				);
+
+				wp_cache_delete( $object_id, 'attachment_data' );
+
+				do_action( "delete_{$meta_type}_meta", array(), $object_id, $meta_key, $meta_value );
+				do_action( "deleted_{$meta_type}_meta", array(), $object_id, $meta_key, $meta_value );
+
+				return true;
+			}
+		}
+
+		// Promoted post meta interception: reset column in wp_posts instead of deleting from wp_postmeta.
+		$promoted_column = _wp_promoted_post_meta_column( $meta_key );
+		if ( $promoted_column ) {
+			$default = ( 'thumbnail_id' === $promoted_column ) ? null : '';
+			$wpdb->update(
+				$wpdb->posts,
+				array( $promoted_column => $default ),
+				array( 'ID' => $object_id )
+			);
+
+			clean_post_cache( $object_id );
+
+			do_action( "delete_{$meta_type}_meta", array(), $object_id, $meta_key, $meta_value );
+			do_action( "deleted_{$meta_type}_meta", array(), $object_id, $meta_key, $meta_value );
+
+			return true;
+		}
+	}
 
 	/**
 	 * Short-circuits deleting metadata of a specific type.
@@ -635,6 +796,48 @@ function get_metadata_raw( $meta_type, $object_id, $meta_key = '', $single = fal
 		return false;
 	}
 
+	// Attachment meta key interception: read from wp_attachment_data instead of wp_postmeta.
+	if ( 'post' === $meta_type && $meta_key ) {
+		$att_column = _wp_attachment_meta_column( $meta_key );
+		if ( $att_column ) {
+			$post = get_post( $object_id );
+			if ( $post && 'attachment' === $post->post_type ) {
+				$att_data = _wp_get_attachment_data( $object_id );
+				$value    = $att_data->$att_column;
+
+				if ( 'metadata' === $att_column && is_string( $value ) ) {
+					$value = json_decode( $value, true );
+				}
+
+				if ( $single ) {
+					return $value;
+				}
+				return array( $value );
+			}
+		}
+	}
+
+	// Promoted post meta interception: read from wp_posts columns instead of wp_postmeta.
+	if ( 'post' === $meta_type && $meta_key ) {
+		$promoted_column = _wp_promoted_post_meta_column( $meta_key );
+		if ( $promoted_column ) {
+			$post = get_post( $object_id );
+			if ( $post ) {
+				$value = $post->$promoted_column;
+
+				// thumbnail_id: cast to int for consistency with old meta behavior.
+				if ( 'thumbnail_id' === $promoted_column ) {
+					$value = $value ? (string) $value : '';
+				}
+
+				if ( $single ) {
+					return $value;
+				}
+				return array( $value );
+			}
+		}
+	}
+
 	/**
 	 * Short-circuits the return value of a meta field.
 	 *
@@ -768,6 +971,19 @@ function metadata_exists( $meta_type, $object_id, $meta_key ) {
 	$object_id = absint( $object_id );
 	if ( ! $object_id ) {
 		return false;
+	}
+
+	// Promoted post meta keys always "exist" as wp_posts columns.
+	if ( 'post' === $meta_type && _wp_promoted_post_meta_column( $meta_key ) ) {
+		return true;
+	}
+
+	// Attachment meta keys always "exist" for attachments.
+	if ( 'post' === $meta_type && _wp_attachment_meta_column( $meta_key ) ) {
+		$post = get_post( $object_id );
+		if ( $post && 'attachment' === $post->post_type ) {
+			return true;
+		}
 	}
 
 	/** This filter is documented in wp-includes/meta.php */
@@ -1856,4 +2072,78 @@ function get_object_subtype( $object_type, $object_id ) {
 	 * @param int    $object_id      ID of the object to get the subtype for.
 	 */
 	return apply_filters( "get_object_subtype_{$object_type}", $object_subtype, $object_id );
+}
+
+/**
+ * Returns the wp_posts column name for a promoted meta key, or false if not mapped.
+ *
+ * These meta keys have been promoted to direct columns on wp_posts
+ * for performance. All reads/writes are intercepted by the metadata API.
+ *
+ * @since 7.0.0
+ * @access private
+ *
+ * @param string $meta_key Metadata key.
+ * @return string|false Column name or false.
+ */
+function _wp_promoted_post_meta_column( $meta_key ) {
+	static $map = array(
+		'_thumbnail_id'      => 'thumbnail_id',
+		'_wp_page_template'  => 'page_template',
+	);
+	return isset( $map[ $meta_key ] ) ? $map[ $meta_key ] : false;
+}
+
+/**
+ * Returns the wp_attachment_data column name for a given meta key, or false if not mapped.
+ *
+ * @since 7.0.0
+ * @access private
+ *
+ * @param string $meta_key Metadata key.
+ * @return string|false Column name or false.
+ */
+function _wp_attachment_meta_column( $meta_key ) {
+	static $map = array(
+		'_wp_attached_file'        => 'file_path',
+		'_wp_attachment_image_alt' => 'alt_text',
+		'_wp_attachment_metadata'  => 'metadata',
+	);
+	return isset( $map[ $meta_key ] ) ? $map[ $meta_key ] : false;
+}
+
+/**
+ * Retrieves the wp_attachment_data row for an attachment, with caching.
+ *
+ * @since 7.0.0
+ * @access private
+ *
+ * @param int $post_id Attachment post ID.
+ * @return object Attachment data row (always returns an object with defaults if row not found).
+ */
+function _wp_get_attachment_data( $post_id ) {
+	global $wpdb;
+
+	$data = wp_cache_get( $post_id, 'attachment_data' );
+
+	if ( false === $data ) {
+		$data = $wpdb->get_row( $wpdb->prepare(
+			"SELECT * FROM $wpdb->attachment_data WHERE post_id = %d",
+			$post_id
+		) );
+
+		if ( ! $data ) {
+			// Row doesn't exist yet (e.g. during attachment creation). Return defaults.
+			$data = (object) array(
+				'post_id'   => $post_id,
+				'file_path' => '',
+				'alt_text'  => '',
+				'metadata'  => null,
+			);
+		}
+
+		wp_cache_set( $post_id, $data, 'attachment_data' );
+	}
+
+	return $data;
 }

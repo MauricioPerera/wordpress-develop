@@ -438,7 +438,7 @@ function _wp_menu_item_classes_by_context( &$menu_items ) {
 			$ancestor_id                 = (int) $menu_item->db_id;
 
 			while (
-				( $ancestor_id = (int) get_post_meta( $ancestor_id, '_menu_item_menu_item_parent', true ) )
+				( $ancestor_id = _wp_get_menu_item_parent( $ancestor_id ) )
 				&& ! in_array( $ancestor_id, $active_ancestor_item_ids, true )
 			) {
 				$active_ancestor_item_ids[] = $ancestor_id;
@@ -465,7 +465,7 @@ function _wp_menu_item_classes_by_context( &$menu_items ) {
 			$ancestor_id                 = (int) $menu_item->db_id;
 
 			while (
-				( $ancestor_id = (int) get_post_meta( $ancestor_id, '_menu_item_menu_item_parent', true ) )
+				( $ancestor_id = _wp_get_menu_item_parent( $ancestor_id ) )
 				&& ! in_array( $ancestor_id, $active_ancestor_item_ids, true )
 			) {
 				$active_ancestor_item_ids[] = $ancestor_id;
@@ -502,7 +502,7 @@ function _wp_menu_item_classes_by_context( &$menu_items ) {
 				$ancestor_id                 = (int) $menu_item->db_id;
 
 				while (
-					( $ancestor_id = (int) get_post_meta( $ancestor_id, '_menu_item_menu_item_parent', true ) )
+					( $ancestor_id = _wp_get_menu_item_parent( $ancestor_id ) )
 					&& ! in_array( $ancestor_id, $active_ancestor_item_ids, true )
 				) {
 					$active_ancestor_item_ids[] = $ancestor_id;

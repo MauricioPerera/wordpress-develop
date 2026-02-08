@@ -25,12 +25,39 @@ class WP_REST_Menu_Items_Controller extends WP_REST_Posts_Controller {
 	 * @return object|WP_Error Post object if ID is valid, WP_Error otherwise.
 	 */
 	protected function get_nav_menu_item( $id ) {
-		$post = $this->get_post( $id );
-		if ( is_wp_error( $post ) ) {
-			return $post;
+		$item = _wp_get_menu_item( (int) $id );
+		if ( ! $item ) {
+			return new WP_Error(
+				'rest_post_invalid_id',
+				__( 'Invalid menu item ID.' ),
+				array( 'status' => 404 )
+			);
 		}
 
-		return wp_setup_nav_menu_item( $post );
+		return wp_setup_nav_menu_item( $item );
+	}
+
+	/**
+	 * Gets the menu item post object, if the ID is valid.
+	 *
+	 * Overrides the parent to read from wp_menu_items instead of wp_posts.
+	 *
+	 * @since 7.0.0
+	 *
+	 * @param int $id Supplied ID.
+	 * @return WP_Post|WP_Error Post object if ID is valid, WP_Error otherwise.
+	 */
+	protected function get_post( $id ) {
+		$item = _wp_get_menu_item( (int) $id );
+		if ( ! $item ) {
+			return new WP_Error(
+				'rest_post_invalid_id',
+				__( 'Invalid menu item ID.' ),
+				array( 'status' => 404 )
+			);
+		}
+
+		return $item;
 	}
 
 	/**
@@ -60,13 +87,90 @@ class WP_REST_Menu_Items_Controller extends WP_REST_Posts_Controller {
 	 * @return bool|WP_Error True if the request has read access for the item, WP_Error object or false otherwise.
 	 */
 	public function get_item_permissions_check( $request ) {
-		$permission_check = parent::get_item_permissions_check( $request );
+		$menu_item = $this->get_nav_menu_item( $request['id'] );
+		if ( is_wp_error( $menu_item ) ) {
+			return $menu_item;
+		}
 
-		if ( true !== $permission_check ) {
-			return $permission_check;
+		if ( 'edit' === $request['context'] && ! current_user_can( 'edit_theme_options' ) ) {
+			return new WP_Error(
+				'rest_forbidden_context',
+				__( 'Sorry, you are not allowed to edit menu items.' ),
+				array( 'status' => rest_authorization_required_code() )
+			);
 		}
 
 		return $this->check_has_read_only_access( $request );
+	}
+
+	/**
+	 * Checks if a given request has access to create a menu item.
+	 *
+	 * @since 7.0.0
+	 *
+	 * @param WP_REST_Request $request Full details about the request.
+	 * @return true|WP_Error True if the request has access to create items, WP_Error object otherwise.
+	 */
+	public function create_item_permissions_check( $request ) {
+		if ( ! current_user_can( 'edit_theme_options' ) ) {
+			return new WP_Error(
+				'rest_cannot_create',
+				__( 'Sorry, you are not allowed to create menu items.' ),
+				array( 'status' => rest_authorization_required_code() )
+			);
+		}
+
+		return true;
+	}
+
+	/**
+	 * Checks if a given request has access to update a menu item.
+	 *
+	 * @since 7.0.0
+	 *
+	 * @param WP_REST_Request $request Full details about the request.
+	 * @return true|WP_Error True if the request has access to update the item, WP_Error object otherwise.
+	 */
+	public function update_item_permissions_check( $request ) {
+		$menu_item = $this->get_nav_menu_item( $request['id'] );
+		if ( is_wp_error( $menu_item ) ) {
+			return $menu_item;
+		}
+
+		if ( ! current_user_can( 'edit_theme_options' ) ) {
+			return new WP_Error(
+				'rest_cannot_update',
+				__( 'Sorry, you are not allowed to update menu items.' ),
+				array( 'status' => rest_authorization_required_code() )
+			);
+		}
+
+		return true;
+	}
+
+	/**
+	 * Checks if a given request has access to delete a menu item.
+	 *
+	 * @since 7.0.0
+	 *
+	 * @param WP_REST_Request $request Full details about the request.
+	 * @return true|WP_Error True if the request has access to delete the item, WP_Error object otherwise.
+	 */
+	public function delete_item_permissions_check( $request ) {
+		$menu_item = $this->get_nav_menu_item( $request['id'] );
+		if ( is_wp_error( $menu_item ) ) {
+			return $menu_item;
+		}
+
+		if ( ! current_user_can( 'edit_theme_options' ) ) {
+			return new WP_Error(
+				'rest_cannot_delete',
+				__( 'Sorry, you are not allowed to delete menu items.' ),
+				array( 'status' => rest_authorization_required_code() )
+			);
+		}
+
+		return true;
 	}
 
 	/**
@@ -114,6 +218,107 @@ class WP_REST_Menu_Items_Controller extends WP_REST_Posts_Controller {
 			__( 'Sorry, you are not allowed to view menu items.' ),
 			array( 'status' => rest_authorization_required_code() )
 		);
+	}
+
+	/**
+	 * Retrieves a collection of nav menu items.
+	 *
+	 * Overrides the parent to query wp_menu_items directly instead of using WP_Query.
+	 *
+	 * @since 7.0.0
+	 *
+	 * @param WP_REST_Request $request Full details about the request.
+	 * @return WP_REST_Response|WP_Error Response object on success, or WP_Error object on failure.
+	 */
+	public function get_items( $request ) {
+		global $wpdb;
+
+		$where = array( '1=1' );
+
+		// Filter by menu ID.
+		if ( ! empty( $request['menus'] ) ) {
+			$where[] = $wpdb->prepare( 'menu_id = %d', absint( $request['menus'] ) );
+		}
+
+		// Filter by status.
+		if ( ! empty( $request['status'] ) ) {
+			$statuses = wp_parse_list( $request['status'] );
+		} else {
+			$statuses = array( 'publish' );
+		}
+		$status_in = implode( "','", array_map( 'esc_sql', $statuses ) );
+		$where[]   = "status IN ('$status_in')";
+
+		// Filter by specific IDs.
+		if ( ! empty( $request['include'] ) ) {
+			$ids     = implode( ',', array_map( 'absint', $request['include'] ) );
+			$where[] = "id IN ($ids)";
+		}
+
+		if ( ! empty( $request['exclude'] ) ) {
+			$ids     = implode( ',', array_map( 'absint', $request['exclude'] ) );
+			$where[] = "id NOT IN ($ids)";
+		}
+
+		// Search.
+		if ( ! empty( $request['search'] ) ) {
+			$where[] = $wpdb->prepare( 'title LIKE %s', '%' . $wpdb->esc_like( $request['search'] ) . '%' );
+		}
+
+		// Filter by menu_order.
+		if ( isset( $request['menu_order'] ) ) {
+			$where[] = $wpdb->prepare( 'position = %d', absint( $request['menu_order'] ) );
+		}
+
+		$where_clause = implode( ' AND ', $where );
+
+		// Ordering.
+		$orderby_map = array(
+			'id'         => 'id',
+			'title'      => 'title',
+			'menu_order' => 'position',
+		);
+		$orderby = 'position';
+		if ( ! empty( $request['orderby'] ) && isset( $orderby_map[ $request['orderby'] ] ) ) {
+			$orderby = $orderby_map[ $request['orderby'] ];
+		}
+		$order = 'ASC';
+		if ( ! empty( $request['order'] ) && 'desc' === strtolower( $request['order'] ) ) {
+			$order = 'DESC';
+		}
+
+		// Pagination.
+		$per_page = isset( $request['per_page'] ) ? (int) $request['per_page'] : 100;
+		$page     = isset( $request['page'] ) ? (int) $request['page'] : 1;
+		$offset   = ( $page - 1 ) * $per_page;
+
+		// Total count.
+		$total = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->menu_items} WHERE $where_clause" );
+
+		// Fetch rows.
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT * FROM {$wpdb->menu_items} WHERE $where_clause ORDER BY $orderby $order LIMIT %d OFFSET %d",
+				$per_page,
+				$offset
+			)
+		);
+
+		$items = array();
+		foreach ( $rows as $row ) {
+			$post   = _wp_menu_item_row_to_post( $row );
+			$post   = wp_setup_nav_menu_item( $post );
+			$data   = $this->prepare_item_for_response( $post, $request );
+			$items[] = $this->prepare_response_for_collection( $data );
+		}
+
+		$response  = rest_ensure_response( $items );
+		$max_pages = $per_page > 0 ? (int) ceil( $total / $per_page ) : 1;
+
+		$response->header( 'X-WP-Total', $total );
+		$response->header( 'X-WP-TotalPages', $max_pages );
+
+		return $response;
 	}
 
 	/**
@@ -195,10 +400,9 @@ class WP_REST_Menu_Items_Controller extends WP_REST_Posts_Controller {
 		 */
 		do_action( 'rest_after_insert_nav_menu_item', $nav_menu_item, $request, true );
 
-		$post = get_post( $nav_menu_item_id );
-		wp_after_insert_post( $post, false, null );
+		$nav_menu_item = $this->get_nav_menu_item( $nav_menu_item_id );
 
-		$response = $this->prepare_item_for_response( $post, $request );
+		$response = $this->prepare_item_for_response( $nav_menu_item, $request );
 		$response = rest_ensure_response( $response );
 
 		$response->set_status( 201 );
@@ -220,7 +424,6 @@ class WP_REST_Menu_Items_Controller extends WP_REST_Posts_Controller {
 		if ( is_wp_error( $valid_check ) ) {
 			return $valid_check;
 		}
-		$post_before       = get_post( $request['id'] );
 		$prepared_nav_item = $this->prepare_item_for_database( $request );
 
 		if ( is_wp_error( $prepared_nav_item ) ) {
@@ -261,7 +464,6 @@ class WP_REST_Menu_Items_Controller extends WP_REST_Posts_Controller {
 			}
 		}
 
-		$post          = get_post( $nav_menu_item_id );
 		$nav_menu_item = $this->get_nav_menu_item( $nav_menu_item_id );
 		$fields_update = $this->update_additional_fields_for_object( $nav_menu_item, $request );
 
@@ -274,9 +476,9 @@ class WP_REST_Menu_Items_Controller extends WP_REST_Posts_Controller {
 		/** This action is documented in wp-includes/rest-api/endpoints/class-wp-rest-menu-items-controller.php */
 		do_action( 'rest_after_insert_nav_menu_item', $nav_menu_item, $request, false );
 
-		wp_after_insert_post( $post, true, $post_before );
+		$nav_menu_item = $this->get_nav_menu_item( $nav_menu_item_id );
 
-		$response = $this->prepare_item_for_response( get_post( $nav_menu_item_id ), $request );
+		$response = $this->prepare_item_for_response( $nav_menu_item, $request );
 
 		return rest_ensure_response( $response );
 	}
@@ -301,12 +503,12 @@ class WP_REST_Menu_Items_Controller extends WP_REST_Posts_Controller {
 			return new WP_Error( 'rest_trash_not_supported', sprintf( __( "Menu items do not support trashing. Set '%s' to delete." ), 'force=true' ), array( 'status' => 501 ) );
 		}
 
-		$previous = $this->prepare_item_for_response( get_post( $request['id'] ), $request );
+		$previous = $this->prepare_item_for_response( $menu_item, $request );
 
-		$result = wp_delete_post( $request['id'], true );
+		$result = _wp_delete_menu_item( $request['id'] );
 
 		if ( ! $result ) {
-			return new WP_Error( 'rest_cannot_delete', __( 'The post cannot be deleted.' ), array( 'status' => 500 ) );
+			return new WP_Error( 'rest_cannot_delete', __( 'The menu item cannot be deleted.' ), array( 'status' => 500 ) );
 		}
 
 		$response = new WP_REST_Response();
@@ -410,11 +612,9 @@ class WP_REST_Menu_Items_Controller extends WP_REST_Posts_Controller {
 			}
 		}
 
-		$taxonomy = get_taxonomy( 'nav_menu' );
-		$base     = ! empty( $taxonomy->rest_base ) ? $taxonomy->rest_base : $taxonomy->name;
 		// If menus submitted, cast to int.
-		if ( ! empty( $request[ $base ] ) ) {
-			$prepared_nav_item['menu-id'] = absint( $request[ $base ] );
+		if ( ! empty( $request['menus'] ) ) {
+			$prepared_nav_item['menu-id'] = absint( $request['menus'] );
 		}
 
 		// Nav menu title.
@@ -601,23 +801,8 @@ class WP_REST_Menu_Items_Controller extends WP_REST_Posts_Controller {
 			$data['meta'] = $this->meta->get_value( $menu_item->ID, $request );
 		}
 
-		$taxonomies = wp_list_filter( get_object_taxonomies( $this->post_type, 'objects' ), array( 'show_in_rest' => true ) );
-
-		foreach ( $taxonomies as $taxonomy ) {
-			$base = ! empty( $taxonomy->rest_base ) ? $taxonomy->rest_base : $taxonomy->name;
-
-			if ( rest_is_field_included( $base, $fields ) ) {
-				$terms = get_the_terms( $item, $taxonomy->name );
-				if ( ! is_array( $terms ) ) {
-					continue;
-				}
-				$term_ids = $terms ? array_values( wp_list_pluck( $terms, 'term_id' ) ) : array();
-				if ( 'nav_menu' === $taxonomy->name ) {
-					$data[ $base ] = $term_ids ? array_shift( $term_ids ) : 0;
-				} else {
-					$data[ $base ] = $term_ids;
-				}
-			}
+		if ( rest_is_field_included( 'menus', $fields ) ) {
+			$data['menus'] = _wp_get_menu_id_for_item( $menu_item->ID );
 		}
 
 		$context = ! empty( $request['context'] ) ? $request['context'] : 'view';
@@ -663,10 +848,19 @@ class WP_REST_Menu_Items_Controller extends WP_REST_Posts_Controller {
 	 * @return array Links for the given post.
 	 */
 	protected function prepare_links( $post ) {
-		$links     = parent::prepare_links( $post );
-		$menu_item = $this->get_nav_menu_item( $post->ID );
+		$menu_item = is_wp_error( $post ) ? $post : ( isset( $post->type ) ? $post : $this->get_nav_menu_item( $post->ID ) );
+		$item_id   = isset( $post->ID ) ? $post->ID : 0;
 
-		if ( empty( $menu_item->object_id ) ) {
+		$links = array(
+			'self'       => array(
+				'href' => rest_url( sprintf( '%s/%s/%d', $this->namespace, $this->rest_base, $item_id ) ),
+			),
+			'collection' => array(
+				'href' => rest_url( sprintf( '%s/%s', $this->namespace, $this->rest_base ) ),
+			),
+		);
+
+		if ( is_wp_error( $menu_item ) || empty( $menu_item->object_id ) ) {
 			return $links;
 		}
 
@@ -700,17 +894,18 @@ class WP_REST_Menu_Items_Controller extends WP_REST_Posts_Controller {
 	 * @return array
 	 */
 	protected function get_schema_links() {
-		$links   = parent::get_schema_links();
-		$href    = rest_url( "{$this->namespace}/{$this->rest_base}/{id}" );
-		$links[] = array(
-			'rel'          => 'https://api.w.org/menu-item-object',
-			'title'        => __( 'Get linked object.' ),
-			'href'         => $href,
-			'targetSchema' => array(
-				'type'       => 'object',
-				'properties' => array(
-					'object' => array(
-						'type' => 'integer',
+		$href  = rest_url( "{$this->namespace}/{$this->rest_base}/{id}" );
+		$links = array(
+			array(
+				'rel'          => 'https://api.w.org/menu-item-object',
+				'title'        => __( 'Get linked object.' ),
+				'href'         => $href,
+				'targetSchema' => array(
+					'type'       => 'object',
+					'properties' => array(
+						'object' => array(
+							'type' => 'integer',
+						),
 					),
 				),
 			),
@@ -907,25 +1102,13 @@ class WP_REST_Menu_Items_Controller extends WP_REST_Posts_Controller {
 			'readonly'    => true,
 		);
 
-		$taxonomies = wp_list_filter( get_object_taxonomies( $this->post_type, 'objects' ), array( 'show_in_rest' => true ) );
-
-		foreach ( $taxonomies as $taxonomy ) {
-			$base                          = ! empty( $taxonomy->rest_base ) ? $taxonomy->rest_base : $taxonomy->name;
-			$schema['properties'][ $base ] = array(
-				/* translators: %s: taxonomy name */
-				'description' => sprintf( __( 'The terms assigned to the object in the %s taxonomy.' ), $taxonomy->name ),
-				'type'        => 'array',
-				'items'       => array(
-					'type' => 'integer',
-				),
-				'context'     => array( 'view', 'edit' ),
-			);
-
-			if ( 'nav_menu' === $taxonomy->name ) {
-				$schema['properties'][ $base ]['type'] = 'integer';
-				unset( $schema['properties'][ $base ]['items'] );
-			}
-		}
+		$schema['properties']['menus'] = array(
+			'description' => __( 'The ID of the menu this item belongs to.' ),
+			'type'        => 'integer',
+			'minimum'     => 0,
+			'default'     => 0,
+			'context'     => array( 'view', 'edit' ),
+		);
 
 		$schema['properties']['meta'] = $this->meta->get_field_schema();
 
@@ -951,7 +1134,7 @@ class WP_REST_Menu_Items_Controller extends WP_REST_Posts_Controller {
 		$query_params = parent::get_collection_params();
 
 		$query_params['menu_order'] = array(
-			'description' => __( 'Limit result set to posts with a specific menu_order value.' ),
+			'description' => __( 'Limit result set to items with a specific menu_order value.' ),
 			'type'        => 'integer',
 		);
 
@@ -967,56 +1150,21 @@ class WP_REST_Menu_Items_Controller extends WP_REST_Posts_Controller {
 			'type'        => 'string',
 			'default'     => 'menu_order',
 			'enum'        => array(
-				'author',
-				'date',
 				'id',
-				'include',
-				'modified',
-				'parent',
-				'relevance',
-				'slug',
-				'include_slugs',
 				'title',
 				'menu_order',
 			),
 		);
+
+		$query_params['menus'] = array(
+			'description' => __( 'Limit result set to items assigned to a specific menu.' ),
+			'type'        => 'integer',
+		);
+
 		// Change default to 100 items.
 		$query_params['per_page']['default'] = 100;
 
 		return $query_params;
-	}
-
-	/**
-	 * Determines the allowed query_vars for a get_items() response and prepares
-	 * them for WP_Query.
-	 *
-	 * @since 5.9.0
-	 *
-	 * @param array           $prepared_args Optional. Prepared WP_Query arguments. Default empty array.
-	 * @param WP_REST_Request $request       Optional. Full details about the request.
-	 * @return array Items query arguments.
-	 */
-	protected function prepare_items_query( $prepared_args = array(), $request = null ) {
-		$query_args = parent::prepare_items_query( $prepared_args, $request );
-
-		// Map to proper WP_Query orderby param.
-		if ( isset( $query_args['orderby'], $request['orderby'] ) ) {
-			$orderby_mappings = array(
-				'id'            => 'ID',
-				'include'       => 'post__in',
-				'slug'          => 'post_name',
-				'include_slugs' => 'post_name__in',
-				'menu_order'    => 'menu_order',
-			);
-
-			if ( isset( $orderby_mappings[ $request['orderby'] ] ) ) {
-				$query_args['orderby'] = $orderby_mappings[ $request['orderby'] ];
-			}
-		}
-
-		$query_args['update_menu_item_cache'] = true;
-
-		return $query_args;
 	}
 
 	/**
@@ -1028,12 +1176,6 @@ class WP_REST_Menu_Items_Controller extends WP_REST_Posts_Controller {
 	 * @return int
 	 */
 	protected function get_menu_id( $menu_item_id ) {
-		$menu_ids = wp_get_post_terms( $menu_item_id, 'nav_menu', array( 'fields' => 'ids' ) );
-		$menu_id  = 0;
-		if ( $menu_ids && ! is_wp_error( $menu_ids ) ) {
-			$menu_id = array_shift( $menu_ids );
-		}
-
-		return $menu_id;
+		return _wp_get_menu_id_for_item( $menu_item_id );
 	}
 }

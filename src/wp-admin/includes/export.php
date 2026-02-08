@@ -123,7 +123,7 @@ function export_wp( $args = array() ) {
 		$term = term_exists( $args['category'], 'category' );
 		if ( $term ) {
 			$join   = "INNER JOIN {$wpdb->term_relationships} ON ({$wpdb->posts}.ID = {$wpdb->term_relationships}.object_id)";
-			$where .= $wpdb->prepare( " AND {$wpdb->term_relationships}.term_taxonomy_id = %d", $term['term_taxonomy_id'] );
+			$where .= $wpdb->prepare( " AND {$wpdb->term_relationships}.term_id = %d", $term['term_taxonomy_id'] );
 		}
 	}
 
@@ -709,29 +709,8 @@ function export_wp( $args = array() ) {
 			<wp:comment_parent><?php echo (int) $c->comment_parent; ?></wp:comment_parent>
 			<wp:comment_user_id><?php echo (int) $c->user_id; ?></wp:comment_user_id>
 					<?php
-					$c_meta = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM $wpdb->commentmeta WHERE comment_id = %d", $c->comment_ID ) );
-					foreach ( $c_meta as $meta ) :
-						/**
-						 * Filters whether to selectively skip comment meta used for WXR exports.
-						 *
-						 * Returning a truthy value from the filter will skip the current meta
-						 * object from being exported.
-						 *
-						 * @since 4.0.0
-						 *
-						 * @param bool   $skip     Whether to skip the current comment meta. Default false.
-						 * @param string $meta_key Current meta key.
-						 * @param object $meta     Current meta object.
-						 */
-						if ( apply_filters( 'wxr_export_skip_commentmeta', false, $meta->meta_key, $meta ) ) {
-							continue;
-						}
-						?>
-	<wp:commentmeta>
-	<wp:meta_key><?php echo wxr_cdata( $meta->meta_key ); ?></wp:meta_key>
-			<wp:meta_value><?php echo wxr_cdata( $meta->meta_value ); ?></wp:meta_value>
-			</wp:commentmeta>
-					<?php	endforeach; ?>
+					// Comment meta table removed in 7.0 — no commentmeta to export.
+					?>
 		</wp:comment>
 			<?php	endforeach; ?>
 		</item>

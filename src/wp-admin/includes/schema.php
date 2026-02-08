@@ -53,50 +53,27 @@ function wp_get_db_schema( $scope = 'all', $blog_id = null ) {
 	$max_index_length = 191;
 
 	// Blog-specific tables.
-	$blog_tables = "CREATE TABLE $wpdb->termmeta (
-	meta_id bigint(20) unsigned NOT NULL auto_increment,
-	term_id bigint(20) unsigned NOT NULL default '0',
-	meta_key varchar(255) default NULL,
-	meta_value longtext,
-	PRIMARY KEY  (meta_id),
-	KEY term_id (term_id),
-	KEY meta_key (meta_key($max_index_length))
-) $charset_collate;
-CREATE TABLE $wpdb->terms (
+	$blog_tables = "CREATE TABLE $wpdb->terms (
  term_id bigint(20) unsigned NOT NULL auto_increment,
+ taxonomy varchar(32) NOT NULL default '',
  name varchar(200) NOT NULL default '',
  slug varchar(200) NOT NULL default '',
- term_group bigint(10) NOT NULL default 0,
- PRIMARY KEY  (term_id),
- KEY slug (slug($max_index_length)),
- KEY name (name($max_index_length))
-) $charset_collate;
-CREATE TABLE $wpdb->term_taxonomy (
- term_taxonomy_id bigint(20) unsigned NOT NULL auto_increment,
- term_id bigint(20) unsigned NOT NULL default 0,
- taxonomy varchar(32) NOT NULL default '',
  description longtext NOT NULL,
  parent bigint(20) unsigned NOT NULL default 0,
  count bigint(20) NOT NULL default 0,
- PRIMARY KEY  (term_taxonomy_id),
- UNIQUE KEY term_id_taxonomy (term_id,taxonomy),
- KEY taxonomy (taxonomy)
+ term_group bigint(10) NOT NULL default 0,
+ PRIMARY KEY  (term_id),
+ UNIQUE KEY taxonomy_slug (taxonomy,slug($max_index_length)),
+ KEY taxonomy (taxonomy),
+ KEY name (name($max_index_length)),
+ KEY parent (parent)
 ) $charset_collate;
 CREATE TABLE $wpdb->term_relationships (
  object_id bigint(20) unsigned NOT NULL default 0,
- term_taxonomy_id bigint(20) unsigned NOT NULL default 0,
+ term_id bigint(20) unsigned NOT NULL default 0,
  term_order int(11) NOT NULL default 0,
- PRIMARY KEY  (object_id,term_taxonomy_id),
- KEY term_taxonomy_id (term_taxonomy_id)
-) $charset_collate;
-CREATE TABLE $wpdb->commentmeta (
-	meta_id bigint(20) unsigned NOT NULL auto_increment,
-	comment_id bigint(20) unsigned NOT NULL default '0',
-	meta_key varchar(255) default NULL,
-	meta_value longtext,
-	PRIMARY KEY  (meta_id),
-	KEY comment_id (comment_id),
-	KEY meta_key (meta_key($max_index_length))
+ PRIMARY KEY  (object_id,term_id),
+ KEY term_id (term_id)
 ) $charset_collate;
 CREATE TABLE $wpdb->comments (
 	comment_ID bigint(20) unsigned NOT NULL auto_increment,
@@ -114,12 +91,15 @@ CREATE TABLE $wpdb->comments (
 	comment_type varchar(20) NOT NULL default 'comment',
 	comment_parent bigint(20) unsigned NOT NULL default '0',
 	user_id bigint(20) unsigned NOT NULL default '0',
+	pre_trash_status varchar(20) default NULL,
+	trashed_at datetime default NULL,
 	PRIMARY KEY  (comment_ID),
 	KEY comment_post_ID (comment_post_ID),
 	KEY comment_approved_date_gmt (comment_approved,comment_date_gmt),
 	KEY comment_date_gmt (comment_date_gmt),
 	KEY comment_parent (comment_parent),
-	KEY comment_author_email (comment_author_email(10))
+	KEY comment_author_email (comment_author_email(10)),
+	KEY trashed_at (trashed_at)
 ) $charset_collate;
 CREATE TABLE $wpdb->links (
 	link_id bigint(20) unsigned NOT NULL auto_increment,
@@ -138,14 +118,17 @@ CREATE TABLE $wpdb->links (
 	PRIMARY KEY  (link_id),
 	KEY link_visible (link_visible)
 ) $charset_collate;
-CREATE TABLE $wpdb->options (
-	option_id bigint(20) unsigned NOT NULL auto_increment,
-	option_name varchar(191) NOT NULL default '',
-	option_value longtext NOT NULL,
-	autoload varchar(20) NOT NULL default 'yes',
-	PRIMARY KEY  (option_id),
-	UNIQUE KEY option_name (option_name),
-	KEY autoload (autoload)
+CREATE TABLE $wpdb->settings (
+	name varchar(191) NOT NULL default '',
+	value longtext NOT NULL,
+	PRIMARY KEY  (name)
+) $charset_collate;
+CREATE TABLE $wpdb->transients (
+	name varchar(191) NOT NULL default '',
+	value longtext NOT NULL,
+	expires_at datetime default NULL,
+	PRIMARY KEY  (name),
+	KEY idx_expires (expires_at)
 ) $charset_collate;
 CREATE TABLE $wpdb->postmeta (
 	meta_id bigint(20) unsigned NOT NULL auto_increment,
@@ -154,7 +137,8 @@ CREATE TABLE $wpdb->postmeta (
 	meta_value longtext,
 	PRIMARY KEY  (meta_id),
 	KEY post_id (post_id),
-	KEY meta_key (meta_key($max_index_length))
+	KEY meta_key (meta_key($max_index_length)),
+	KEY post_id_meta_key (post_id,meta_key($max_index_length))
 ) $charset_collate;
 CREATE TABLE $wpdb->posts (
 	ID bigint(20) unsigned NOT NULL auto_increment,
@@ -169,8 +153,6 @@ CREATE TABLE $wpdb->posts (
 	ping_status varchar(20) NOT NULL default 'open',
 	post_password varchar(255) NOT NULL default '',
 	post_name varchar(200) NOT NULL default '',
-	to_ping text NOT NULL,
-	pinged text NOT NULL,
 	post_modified datetime NOT NULL default '0000-00-00 00:00:00',
 	post_modified_gmt datetime NOT NULL default '0000-00-00 00:00:00',
 	post_content_filtered longtext NOT NULL,
@@ -180,12 +162,64 @@ CREATE TABLE $wpdb->posts (
 	post_type varchar(20) NOT NULL default 'post',
 	post_mime_type varchar(100) NOT NULL default '',
 	comment_count bigint(20) NOT NULL default '0',
+	thumbnail_id bigint(20) unsigned default NULL,
+	page_template varchar(100) NOT NULL default '',
 	PRIMARY KEY  (ID),
 	KEY post_name (post_name($max_index_length)),
 	KEY type_status_date (post_type,post_status,post_date,ID),
 	KEY post_parent (post_parent),
 	KEY post_author (post_author),
-	KEY type_status_author (post_type,post_status,post_author)
+	KEY type_status_author (post_type,post_status,post_author),
+	FULLTEXT idx_search (post_title,post_content,post_excerpt)
+) $charset_collate;
+CREATE TABLE $wpdb->attachment_data (
+ post_id bigint(20) unsigned NOT NULL,
+ file_path varchar(255) NOT NULL default '',
+ alt_text varchar(255) NOT NULL default '',
+ metadata JSON default NULL,
+ PRIMARY KEY  (post_id),
+ KEY idx_file_path (file_path($max_index_length))
+) $charset_collate;
+CREATE TABLE $wpdb->revisions (
+ id bigint(20) unsigned NOT NULL auto_increment,
+ post_id bigint(20) unsigned NOT NULL,
+ author_id bigint(20) unsigned NOT NULL default '0',
+ is_autosave tinyint(1) NOT NULL default 0,
+ title text NOT NULL,
+ content longtext NOT NULL,
+ excerpt text NOT NULL,
+ created_at datetime NOT NULL default '0000-00-00 00:00:00',
+ created_at_gmt datetime NOT NULL default '0000-00-00 00:00:00',
+ PRIMARY KEY  (id),
+ KEY idx_post_date (post_id,created_at_gmt),
+ KEY idx_autosave (post_id,is_autosave,author_id)
+) $charset_collate;
+CREATE TABLE $wpdb->menus (
+ id bigint(20) unsigned NOT NULL auto_increment,
+ name varchar(200) NOT NULL default '',
+ slug varchar(200) NOT NULL default '',
+ PRIMARY KEY  (id),
+ UNIQUE KEY slug (slug($max_index_length))
+) $charset_collate;
+CREATE TABLE $wpdb->menu_items (
+ id bigint(20) unsigned NOT NULL auto_increment,
+ menu_id bigint(20) unsigned NOT NULL default 0,
+ parent_id bigint(20) unsigned NOT NULL default 0,
+ position int NOT NULL default 0,
+ item_type varchar(50) NOT NULL default 'custom',
+ object_type varchar(50) NOT NULL default '',
+ object_id bigint(20) unsigned NOT NULL default 0,
+ title varchar(255) NOT NULL default '',
+ url varchar(2048) NOT NULL default '',
+ target varchar(50) NOT NULL default '',
+ css_classes varchar(255) NOT NULL default '',
+ xfn varchar(255) NOT NULL default '',
+ description text NOT NULL,
+ attr_title varchar(255) NOT NULL default '',
+ status varchar(20) NOT NULL default 'publish',
+ PRIMARY KEY  (id),
+ KEY idx_menu_position (menu_id,position),
+ KEY idx_object (object_id,item_type)
 ) $charset_collate;\n";
 
 	// Single site users table. The multisite flavor of the users table is handled below.
@@ -578,17 +612,8 @@ function populate_options( array $options = array() ) {
 
 	$options = wp_parse_args( $options, $defaults );
 
-	// Set autoload to no for these options.
-	$fat_options = array(
-		'moderation_keys',
-		'recently_edited',
-		'disallowed_keys',
-		'uninstall_plugins',
-		'auto_plugin_theme_update_emails',
-	);
-
 	$keys             = "'" . implode( "', '", array_keys( $options ) ) . "'";
-	$existing_options = $wpdb->get_col( "SELECT option_name FROM $wpdb->options WHERE option_name in ( $keys )" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+	$existing_options = $wpdb->get_col( "SELECT name FROM $wpdb->settings WHERE name in ( $keys )" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 
 	$insert = '';
 
@@ -597,23 +622,17 @@ function populate_options( array $options = array() ) {
 			continue;
 		}
 
-		if ( in_array( $option, $fat_options, true ) ) {
-			$autoload = 'off';
-		} else {
-			$autoload = 'on';
-		}
-
 		if ( ! empty( $insert ) ) {
 			$insert .= ', ';
 		}
 
 		$value = maybe_serialize( sanitize_option( $option, $value ) );
 
-		$insert .= $wpdb->prepare( '(%s, %s, %s)', $option, $value, $autoload );
+		$insert .= $wpdb->prepare( '(%s, %s)', $option, $value );
 	}
 
 	if ( ! empty( $insert ) ) {
-		$wpdb->query( "INSERT INTO $wpdb->options (option_name, option_value, autoload) VALUES " . $insert ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$wpdb->query( "INSERT INTO $wpdb->settings (name, value) VALUES " . $insert ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 	}
 
 	// In case it is set, but blank, update "home".
@@ -705,7 +724,7 @@ function populate_options( array $options = array() ) {
 	}
 
 	// Delete obsolete magpie stuff.
-	$wpdb->query( "DELETE FROM $wpdb->options WHERE option_name REGEXP '^rss_[0-9a-f]{32}(_ts)?$'" );
+	$wpdb->query( "DELETE FROM $wpdb->settings WHERE name REGEXP '^rss_[0-9a-f]{32}(_ts)?$'" );
 
 	// Clear expired transients.
 	delete_expired_transients( true );

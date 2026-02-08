@@ -61,16 +61,44 @@ class WP_REST_Menus_Controller extends WP_REST_Terms_Controller {
 	 * @return WP_Term|WP_Error Term object if ID is valid, WP_Error otherwise.
 	 */
 	protected function get_term( $id ) {
-		$term = parent::get_term( $id );
+		$nav_term = wp_get_nav_menu_object( (int) $id );
 
-		if ( is_wp_error( $term ) ) {
-			return $term;
+		if ( ! $nav_term ) {
+			return new WP_Error( 'rest_term_invalid', __( 'Term does not exist.' ), array( 'status' => 404 ) );
 		}
 
-		$nav_term           = wp_get_nav_menu_object( $term );
 		$nav_term->auto_add = $this->get_menu_auto_add( $nav_term->term_id );
 
 		return $nav_term;
+	}
+
+	/**
+	 * Retrieves all menus.
+	 *
+	 * @since 7.0.0
+	 *
+	 * @param WP_REST_Request $request Full details about the request.
+	 * @return WP_REST_Response|WP_Error Response object on success, or WP_Error object on failure.
+	 */
+	public function get_items( $request ) {
+		$args = array(
+			'orderby' => isset( $request['orderby'] ) ? $request['orderby'] : 'name',
+			'order'   => isset( $request['order'] ) ? $request['order'] : 'ASC',
+		);
+
+		$menus = wp_get_nav_menus( $args );
+
+		$response = array();
+		foreach ( $menus as $menu ) {
+			$data       = $this->prepare_item_for_response( $menu, $request );
+			$response[] = $this->prepare_response_for_collection( $data );
+		}
+
+		$response = rest_ensure_response( $response );
+		$response->header( 'X-WP-Total', count( $menus ) );
+		$response->header( 'X-WP-TotalPages', 1 );
+
+		return $response;
 	}
 
 	/**
@@ -122,10 +150,28 @@ class WP_REST_Menus_Controller extends WP_REST_Terms_Controller {
 	 */
 	public function prepare_item_for_response( $term, $request ) {
 		$nav_menu = wp_get_nav_menu_object( $term );
-		$response = parent::prepare_item_for_response( $nav_menu, $request );
+		$fields   = $this->get_fields_for_response( $request );
+		$data     = array();
 
-		$fields = $this->get_fields_for_response( $request );
-		$data   = $response->get_data();
+		if ( rest_is_field_included( 'id', $fields ) ) {
+			$data['id'] = (int) $nav_menu->term_id;
+		}
+
+		if ( rest_is_field_included( 'description', $fields ) ) {
+			$data['description'] = $nav_menu->description;
+		}
+
+		if ( rest_is_field_included( 'name', $fields ) ) {
+			$data['name'] = $nav_menu->name;
+		}
+
+		if ( rest_is_field_included( 'slug', $fields ) ) {
+			$data['slug'] = $nav_menu->slug;
+		}
+
+		if ( rest_is_field_included( 'meta', $fields ) ) {
+			$data['meta'] = array();
+		}
 
 		if ( rest_is_field_included( 'locations', $fields ) ) {
 			$data['locations'] = $this->get_menu_locations( $nav_menu->term_id );
@@ -142,11 +188,11 @@ class WP_REST_Menus_Controller extends WP_REST_Terms_Controller {
 		$response = rest_ensure_response( $data );
 
 		if ( rest_is_field_included( '_links', $fields ) || rest_is_field_included( '_embedded', $fields ) ) {
-			$response->add_links( $this->prepare_links( $term ) );
+			$response->add_links( $this->prepare_links( $nav_menu ) );
 		}
 
 		/** This action is documented in wp-includes/rest-api/endpoints/class-wp-rest-terms-controller.php */
-		return apply_filters( "rest_prepare_{$this->taxonomy}", $response, $term, $request );
+		return apply_filters( "rest_prepare_{$this->taxonomy}", $response, $nav_menu, $request );
 	}
 
 	/**
@@ -158,7 +204,14 @@ class WP_REST_Menus_Controller extends WP_REST_Terms_Controller {
 	 * @return array Links for the given term.
 	 */
 	protected function prepare_links( $term ) {
-		$links = parent::prepare_links( $term );
+		$links = array(
+			'self'       => array(
+				'href' => rest_url( $this->namespace . '/' . $this->rest_base . '/' . $term->term_id ),
+			),
+			'collection' => array(
+				'href' => rest_url( $this->namespace . '/' . $this->rest_base ),
+			),
+		);
 
 		$locations = $this->get_menu_locations( $term->term_id );
 		foreach ( $locations as $location ) {
@@ -182,12 +235,18 @@ class WP_REST_Menus_Controller extends WP_REST_Terms_Controller {
 	 * @return object Prepared term data.
 	 */
 	public function prepare_item_for_database( $request ) {
-		$prepared_term = parent::prepare_item_for_database( $request );
+		$prepared_term = new stdClass();
 
-		$schema = $this->get_item_schema();
-
-		if ( isset( $request['name'] ) && ! empty( $schema['properties']['name'] ) ) {
+		if ( isset( $request['name'] ) ) {
 			$prepared_term->{'menu-name'} = $request['name'];
+		}
+
+		if ( isset( $request['description'] ) ) {
+			$prepared_term->description = $request['description'];
+		}
+
+		if ( isset( $request['slug'] ) ) {
+			$prepared_term->slug = $request['slug'];
 		}
 
 		return $prepared_term;
@@ -202,37 +261,22 @@ class WP_REST_Menus_Controller extends WP_REST_Terms_Controller {
 	 * @return WP_REST_Response|WP_Error Response object on success, or WP_Error object on failure.
 	 */
 	public function create_item( $request ) {
-		if ( isset( $request['parent'] ) ) {
-			if ( ! is_taxonomy_hierarchical( $this->taxonomy ) ) {
-				return new WP_Error( 'rest_taxonomy_not_hierarchical', __( 'Cannot set parent term, taxonomy is not hierarchical.' ), array( 'status' => 400 ) );
-			}
-
-			$parent = wp_get_nav_menu_object( (int) $request['parent'] );
-
-			if ( ! $parent ) {
-				return new WP_Error( 'rest_term_invalid', __( 'Parent term does not exist.' ), array( 'status' => 400 ) );
-			}
-		}
-
 		$prepared_term = $this->prepare_item_for_database( $request );
 
 		$term = wp_update_nav_menu_object( 0, wp_slash( (array) $prepared_term ) );
 
 		if ( is_wp_error( $term ) ) {
-			/*
-			 * If we're going to inform the client that the term already exists,
-			 * give them the identifier for future use.
-			 */
-
 			if ( in_array( 'menu_exists', $term->get_error_codes(), true ) ) {
-				$existing_term = get_term_by( 'name', $prepared_term->{'menu-name'}, $this->taxonomy );
-				$term->add_data( $existing_term->term_id, 'menu_exists' );
-				$term->add_data(
-					array(
-						'status'  => 400,
-						'term_id' => $existing_term->term_id,
-					)
-				);
+				$existing_menu = wp_get_nav_menu_object( $prepared_term->{'menu-name'} );
+				if ( $existing_menu ) {
+					$term->add_data( $existing_menu->term_id, 'menu_exists' );
+					$term->add_data(
+						array(
+							'status'  => 400,
+							'term_id' => $existing_menu->term_id,
+						)
+					);
+				}
 			} else {
 				$term->add_data( array( 'status' => 400 ) );
 			}
@@ -296,18 +340,6 @@ class WP_REST_Menus_Controller extends WP_REST_Terms_Controller {
 			return $term;
 		}
 
-		if ( isset( $request['parent'] ) ) {
-			if ( ! is_taxonomy_hierarchical( $this->taxonomy ) ) {
-				return new WP_Error( 'rest_taxonomy_not_hierarchical', __( 'Cannot set parent term, taxonomy is not hierarchical.' ), array( 'status' => 400 ) );
-			}
-
-			$parent = get_term( (int) $request['parent'], $this->taxonomy );
-
-			if ( ! $parent ) {
-				return new WP_Error( 'rest_term_invalid', __( 'Parent term does not exist.' ), array( 'status' => 400 ) );
-			}
-		}
-
 		$prepared_term = $this->prepare_item_for_database( $request );
 
 		// Only update the term if we have something to update.
@@ -324,19 +356,10 @@ class WP_REST_Menus_Controller extends WP_REST_Terms_Controller {
 			}
 		}
 
-		$term = get_term( $term->term_id, $this->taxonomy );
+		$term = wp_get_nav_menu_object( $term->term_id );
 
 		/** This action is documented in wp-includes/rest-api/endpoints/class-wp-rest-terms-controller.php */
 		do_action( "rest_insert_{$this->taxonomy}", $term, $request, false );
-
-		$schema = $this->get_item_schema();
-		if ( ! empty( $schema['properties']['meta'] ) && isset( $request['meta'] ) ) {
-			$meta_update = $this->meta->update_value( $request['meta'], $term->term_id );
-
-			if ( is_wp_error( $meta_update ) ) {
-				return $meta_update;
-			}
-		}
 
 		$locations_update = $this->handle_locations( $term->term_id, $request );
 
@@ -345,12 +368,6 @@ class WP_REST_Menus_Controller extends WP_REST_Terms_Controller {
 		}
 
 		$this->handle_auto_add( $term->term_id, $request );
-
-		$fields_update = $this->update_additional_fields_for_object( $term, $request );
-
-		if ( is_wp_error( $fields_update ) ) {
-			return $fields_update;
-		}
 
 		$request->set_param( 'context', 'view' );
 
@@ -533,8 +550,41 @@ class WP_REST_Menus_Controller extends WP_REST_Terms_Controller {
 			return $this->add_additional_fields_schema( $this->schema );
 		}
 
-		$schema = parent::get_item_schema();
-		unset( $schema['properties']['count'], $schema['properties']['link'], $schema['properties']['taxonomy'] );
+		$schema = array(
+			'$schema'    => 'http://json-schema.org/draft-04/schema#',
+			'title'      => 'nav_menu',
+			'type'       => 'object',
+			'properties' => array(
+				'id'          => array(
+					'description' => __( 'Unique identifier for the menu.' ),
+					'type'        => 'integer',
+					'context'     => array( 'view', 'edit', 'embed' ),
+					'readonly'    => true,
+				),
+				'description' => array(
+					'description' => __( 'HTML description of the menu.' ),
+					'type'        => 'string',
+					'context'     => array( 'view', 'edit' ),
+				),
+				'name'        => array(
+					'description' => __( 'HTML title for the menu.' ),
+					'type'        => 'string',
+					'context'     => array( 'view', 'edit', 'embed' ),
+					'required'    => true,
+					'arg_options' => array(
+						'sanitize_callback' => 'sanitize_text_field',
+					),
+				),
+				'slug'        => array(
+					'description' => __( 'An alphanumeric identifier for the menu.' ),
+					'type'        => 'string',
+					'context'     => array( 'view', 'edit', 'embed' ),
+					'arg_options' => array(
+						'sanitize_callback' => 'sanitize_title',
+					),
+				),
+			),
+		);
 
 		$schema['properties']['locations'] = array(
 			'description' => __( 'The locations assigned to the menu.' ),

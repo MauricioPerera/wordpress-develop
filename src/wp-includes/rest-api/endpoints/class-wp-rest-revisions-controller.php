@@ -213,7 +213,7 @@ class WP_REST_Revisions_Controller extends WP_REST_Controller {
 			return $error;
 		}
 
-		$revision = get_post( (int) $id );
+		$revision = _wp_get_revision( (int) $id );
 		if ( empty( $revision ) || empty( $revision->ID ) || 'revision' !== $revision->post_type ) {
 			return $error;
 		}
@@ -256,75 +256,55 @@ class WP_REST_Revisions_Controller extends WP_REST_Controller {
 		$is_head_request = $request->is_method( 'HEAD' );
 
 		if ( wp_revisions_enabled( $parent ) ) {
-			$registered = $this->get_collection_params();
-			$args       = array(
-				'post_parent'      => $parent->ID,
-				'post_type'        => 'revision',
-				'post_status'      => 'inherit',
-				'posts_per_page'   => -1,
-				'orderby'          => 'date ID',
-				'order'            => 'DESC',
-				'suppress_filters' => true,
+			global $wpdb;
+
+			$registered  = $this->get_collection_params();
+			$per_page    = isset( $registered['per_page'], $request['per_page'] ) ? (int) $request['per_page'] : -1;
+			$page        = isset( $registered['page'], $request['page'] ) ? (int) $request['page'] : 1;
+			$offset      = isset( $registered['offset'], $request['offset'] ) ? (int) $request['offset'] : 0;
+			$order       = isset( $request['order'] ) && 'ASC' === strtoupper( $request['order'] ) ? 'ASC' : 'DESC';
+			$include     = isset( $request['include'] ) ? wp_parse_id_list( $request['include'] ) : array();
+			$exclude     = isset( $request['exclude'] ) ? wp_parse_id_list( $request['exclude'] ) : array();
+
+			// Count total revisions.
+			$total_revisions = (int) $wpdb->get_var( $wpdb->prepare(
+				"SELECT COUNT(*) FROM $wpdb->revisions WHERE post_id = %d",
+				$parent->ID
+			) );
+
+			// Build query.
+			$sql = $wpdb->prepare(
+				"SELECT * FROM $wpdb->revisions WHERE post_id = %d",
+				$parent->ID
 			);
 
-			$parameter_mappings = array(
-				'exclude'  => 'post__not_in',
-				'include'  => 'post__in',
-				'offset'   => 'offset',
-				'order'    => 'order',
-				'orderby'  => 'orderby',
-				'page'     => 'paged',
-				'per_page' => 'posts_per_page',
-				'search'   => 's',
-			);
+			if ( ! empty( $include ) ) {
+				$sql .= ' AND id IN (' . implode( ',', array_map( 'absint', $include ) ) . ')';
+			}
+			if ( ! empty( $exclude ) ) {
+				$sql .= ' AND id NOT IN (' . implode( ',', array_map( 'absint', $exclude ) ) . ')';
+			}
 
-			foreach ( $parameter_mappings as $api_param => $wp_param ) {
-				if ( isset( $registered[ $api_param ], $request[ $api_param ] ) ) {
-					$args[ $wp_param ] = $request[ $api_param ];
+			$sql .= " ORDER BY created_at_gmt $order, id $order";
+
+			if ( $per_page > 0 ) {
+				if ( $offset ) {
+					$sql .= $wpdb->prepare( ' LIMIT %d, %d', $offset, $per_page );
+				} else {
+					$sql .= $wpdb->prepare( ' LIMIT %d, %d', ( $page - 1 ) * $per_page, $per_page );
 				}
-			}
-
-			// For backward-compatibility, 'date' needs to resolve to 'date ID'.
-			if ( isset( $args['orderby'] ) && 'date' === $args['orderby'] ) {
-				$args['orderby'] = 'date ID';
-			}
-
-			if ( $is_head_request ) {
-				// Force the 'fields' argument. For HEAD requests, only post IDs are required to calculate pagination.
-				$args['fields'] = 'ids';
-				// Disable priming post meta for HEAD requests to improve performance.
-				$args['update_post_term_cache'] = false;
-				$args['update_post_meta_cache'] = false;
-			}
-
-			/** This filter is documented in wp-includes/rest-api/endpoints/class-wp-rest-posts-controller.php */
-			$args       = apply_filters( 'rest_revision_query', $args, $request );
-			$query_args = $this->prepare_items_query( $args, $request );
-
-			$revisions_query = new WP_Query();
-			$revisions       = $revisions_query->query( $query_args );
-			$offset          = isset( $query_args['offset'] ) ? (int) $query_args['offset'] : 0;
-			$page            = isset( $query_args['paged'] ) ? (int) $query_args['paged'] : 0;
-			$total_revisions = $revisions_query->found_posts;
-
-			if ( $total_revisions < 1 ) {
-				// Out-of-bounds, run the query without pagination/offset to get the total count.
-				unset( $query_args['paged'], $query_args['offset'] );
-
-				$count_query                          = new WP_Query();
-				$query_args['fields']                 = 'ids';
-				$query_args['posts_per_page']         = 1;
-				$query_args['update_post_meta_cache'] = false;
-				$query_args['update_post_term_cache'] = false;
-
-				$count_query->query( $query_args );
-				$total_revisions = $count_query->found_posts;
-			}
-
-			if ( $revisions_query->query_vars['posts_per_page'] > 0 ) {
-				$max_pages = (int) ceil( $total_revisions / (int) $revisions_query->query_vars['posts_per_page'] );
+				$max_pages = (int) ceil( $total_revisions / $per_page );
 			} else {
 				$max_pages = $total_revisions > 0 ? 1 : 0;
+			}
+
+			$rows      = $wpdb->get_results( $sql );
+			$revisions = array();
+
+			if ( $rows ) {
+				foreach ( $rows as $row ) {
+					$revisions[] = _wp_revision_row_to_post( $row );
+				}
 			}
 
 			if ( $total_revisions > 0 ) {

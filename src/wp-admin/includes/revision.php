@@ -25,7 +25,7 @@ function wp_get_revision_ui_diff( $post, $compare_from, $compare_to ) {
 	}
 
 	if ( $compare_from ) {
-		$compare_from = get_post( $compare_from );
+		$compare_from = _wp_get_revision( (int) $compare_from );
 		if ( ! $compare_from ) {
 			return false;
 		}
@@ -34,7 +34,7 @@ function wp_get_revision_ui_diff( $post, $compare_from, $compare_to ) {
 		$compare_from = false;
 	}
 
-	$compare_to = get_post( $compare_to );
+	$compare_to = _wp_get_revision( (int) $compare_to );
 	if ( ! $compare_to ) {
 		return false;
 	}

@@ -396,35 +396,35 @@ require_once ABSPATH . 'wp-admin/admin-header.php';
 		<input type="hidden" name="option_page" value="options" />
 		<table class="form-table" role="presentation">
 <?php
-$options = $wpdb->get_results( "SELECT * FROM $wpdb->options ORDER BY option_name" );
+$options = $wpdb->get_results( "SELECT name, value FROM $wpdb->settings ORDER BY name" );
 
 foreach ( (array) $options as $option ) :
 	$disabled = false;
 
-	if ( '' === $option->option_name ) {
+	if ( '' === $option->name ) {
 		continue;
 	}
 
-	if ( 'home' === $option->option_name && defined( 'WP_HOME' ) ) {
+	if ( 'home' === $option->name && defined( 'WP_HOME' ) ) {
 		$disabled = true;
 	}
 
-	if ( 'siteurl' === $option->option_name && defined( 'WP_SITEURL' ) ) {
+	if ( 'siteurl' === $option->name && defined( 'WP_SITEURL' ) ) {
 		$disabled = true;
 	}
 
-	if ( is_serialized( $option->option_value ) ) {
-		if ( is_serialized_string( $option->option_value ) ) {
+	if ( is_serialized( $option->value ) ) {
+		if ( is_serialized_string( $option->value ) ) {
 			// This is a serialized string, so we should display it.
-			$value               = maybe_unserialize( $option->option_value );
-			$options_to_update[] = $option->option_name;
+			$value               = maybe_unserialize( $option->value );
+			$options_to_update[] = $option->name;
 		} else {
 			$value    = 'SERIALIZED DATA';
 			$disabled = true;
 		}
 	} else {
-		$value               = $option->option_value;
-		$options_to_update[] = $option->option_name;
+		$value               = $option->value;
+		$options_to_update[] = $option->name;
 	}
 
 	$class = 'all-options';
@@ -433,10 +433,10 @@ foreach ( (array) $options as $option ) :
 		$class .= ' disabled';
 	}
 
-	$name = esc_attr( $option->option_name );
+	$name = esc_attr( $option->name );
 	?>
 <tr>
-	<th scope="row"><label for="<?php echo $name; ?>"><?php echo esc_html( $option->option_name ); ?></label></th>
+	<th scope="row"><label for="<?php echo $name; ?>"><?php echo esc_html( $option->name ); ?></label></th>
 <td>
 	<?php if ( str_contains( $value, "\n" ) ) : ?>
 		<textarea class="<?php echo $class; ?>" name="<?php echo $name; ?>" id="<?php echo $name; ?>" cols="30" rows="5"><?php echo esc_textarea( $value ); ?></textarea>

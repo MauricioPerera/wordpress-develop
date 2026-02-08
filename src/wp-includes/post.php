@@ -3843,12 +3843,11 @@ function wp_delete_post( $post_id = 0, $force_delete = false ) {
 		}
 	}
 
-	// Do raw query. wp_get_post_revisions() is filtered.
+	// Delete revisions from the dedicated revisions table.
 	$revision_ids = $wpdb->get_col(
-		$wpdb->prepare( "SELECT ID FROM $wpdb->posts WHERE post_parent = %d AND post_type = 'revision'", $post_id )
+		$wpdb->prepare( "SELECT id FROM $wpdb->revisions WHERE post_id = %d", $post_id )
 	);
 
-	// Use wp_delete_post (via wp_delete_post_revision) again. Ensures any meta/misplaced data gets cleaned up.
 	foreach ( $revision_ids as $revision_id ) {
 		wp_delete_post_revision( $revision_id );
 	}
@@ -4470,10 +4469,6 @@ function wp_get_recent_posts( $args = array(), $output = ARRAY_A ) {
  *     @type string $post_password         The password to access the post. Default empty.
  *     @type string $post_name             The post name. Default is the sanitized post title
  *                                         when creating a new post.
- *     @type string $to_ping               Space or carriage return-separated list of URLs to ping.
- *                                         Default empty.
- *     @type string $pinged                Space or carriage return-separated list of URLs that have
- *                                         been pinged. Default empty.
  *     @type int    $post_parent           Set this for the post it belongs to, if any. Default 0.
  *     @type int    $menu_order            The order the post should be displayed in. Default 0.
  *     @type string $post_mime_type        The mime type of the post. Default empty.
@@ -4517,8 +4512,6 @@ function wp_insert_post( $postarr, $wp_error = false, $fire_after_hooks = true )
 		'comment_status'        => '',
 		'ping_status'           => '',
 		'post_password'         => '',
-		'to_ping'               => '',
-		'pinged'                => '',
 		'post_parent'           => 0,
 		'menu_order'            => 0,
 		'guid'                  => '',
@@ -4726,8 +4719,6 @@ function wp_insert_post( $postarr, $wp_error = false, $fire_after_hooks = true )
 	$post_content_filtered = $postarr['post_content_filtered'];
 	$post_author           = $postarr['post_author'] ?? $user_id;
 	$ping_status           = empty( $postarr['ping_status'] ) ? get_default_comment_status( $post_type, 'pingback' ) : $postarr['ping_status'];
-	$to_ping               = isset( $postarr['to_ping'] ) ? sanitize_trackback_urls( $postarr['to_ping'] ) : '';
-	$pinged                = $postarr['pinged'] ?? '';
 	$import_id             = $postarr['import_id'] ?? 0;
 
 	/*
@@ -4826,8 +4817,6 @@ function wp_insert_post( $postarr, $wp_error = false, $fire_after_hooks = true )
 		'ping_status',
 		'post_password',
 		'post_name',
-		'to_ping',
-		'pinged',
 		'post_modified',
 		'post_modified_gmt',
 		'post_parent',
@@ -5930,36 +5919,8 @@ function wp_after_insert_post( $post, $update, $post_before ) {
  * @return int|false How many rows were updated.
  */
 function add_ping( $post, $uri ) {
-	global $wpdb;
-
-	$post = get_post( $post );
-
-	if ( ! $post ) {
-		return false;
-	}
-
-	$pung = trim( $post->pinged );
-	$pung = preg_split( '/\s/', $pung );
-
-	if ( is_array( $uri ) ) {
-		$pung = array_merge( $pung, $uri );
-	} else {
-		$pung[] = $uri;
-	}
-	$new = implode( "\n", $pung );
-
-	/**
-	 * Filters the new ping URL to add for the given post.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string $new New ping URL to add.
-	 */
-	$new = apply_filters( 'add_ping', $new );
-
-	$return = $wpdb->update( $wpdb->posts, array( 'pinged' => $new ), array( 'ID' => $post->ID ) );
-	clean_post_cache( $post->ID );
-	return $return;
+	// Trackback/pingback columns removed in 7.0. No-op for backward compatibility.
+	return 0;
 }
 
 /**
@@ -6015,16 +5976,10 @@ function get_pung( $post ) {
 		return false;
 	}
 
-	$pung = trim( $post->pinged );
-	$pung = preg_split( '/\s/', $pung );
+	// Trackback/pingback columns removed in 7.0. Always returns empty array.
+	$pung = array();
 
-	/**
-	 * Filters the list of already-pinged URLs for the given post.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string[] $pung Array of URLs already pinged for the given post.
-	 */
+	/** This filter is documented in wp-includes/post.php */
 	return apply_filters( 'get_pung', $pung );
 }
 
@@ -6044,16 +5999,10 @@ function get_to_ping( $post ) {
 		return false;
 	}
 
-	$to_ping = sanitize_trackback_urls( $post->to_ping );
-	$to_ping = preg_split( '/\s/', $to_ping, -1, PREG_SPLIT_NO_EMPTY );
+	// Trackback/pingback columns removed in 7.0. Always returns empty array.
+	$to_ping = array();
 
-	/**
-	 * Filters the list of URLs yet to ping for the given post.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string[] $to_ping List of URLs yet to ping.
-	 */
+	/** This filter is documented in wp-includes/post.php */
 	return apply_filters( 'get_to_ping', $to_ping );
 }
 
@@ -6658,7 +6607,19 @@ function wp_insert_attachment( $args, $file = false, $parent_post_id = 0, $wp_er
 
 	$data['post_type'] = 'attachment';
 
-	return wp_insert_post( $data, $wp_error, $fire_after_hooks );
+	$post_id = wp_insert_post( $data, $wp_error, $fire_after_hooks );
+
+	// Ensure a wp_attachment_data row exists for the new attachment.
+	// The meta interceptor may have already created it via UPSERT during wp_insert_post().
+	if ( ! is_wp_error( $post_id ) && $post_id ) {
+		global $wpdb;
+		$wpdb->query( $wpdb->prepare(
+			"INSERT IGNORE INTO $wpdb->attachment_data (post_id) VALUES (%d)",
+			$post_id
+		) );
+	}
+
+	return $post_id;
 }
 
 /**
@@ -6757,6 +6718,11 @@ function wp_delete_attachment( $post_id, $force_delete = false ) {
 
 	/** This action is documented in wp-includes/post.php */
 	do_action( 'delete_post', $post_id, $post );
+
+	// Delete supplementary attachment data.
+	$wpdb->delete( $wpdb->attachment_data, array( 'post_id' => $post_id ) );
+	wp_cache_delete( $post_id, 'attachment_data' );
+
 	$result = $wpdb->delete( $wpdb->posts, array( 'ID' => $post_id ) );
 	if ( ! $result ) {
 		return false;
@@ -6792,7 +6758,7 @@ function wp_delete_attachment_files( $post_id, $meta, $backup_sizes, $file ) {
 
 	if ( ! empty( $meta['thumb'] ) ) {
 		// Don't delete the thumb if another attachment uses it.
-		if ( ! $wpdb->get_row( $wpdb->prepare( "SELECT meta_id FROM $wpdb->postmeta WHERE meta_key = '_wp_attachment_metadata' AND meta_value LIKE %s AND post_id <> %d", '%' . $wpdb->esc_like( $meta['thumb'] ) . '%', $post_id ) ) ) {
+		if ( ! $wpdb->get_row( $wpdb->prepare( "SELECT post_id FROM $wpdb->attachment_data WHERE JSON_SEARCH(metadata, 'one', %s) IS NOT NULL AND post_id <> %d", $meta['thumb'], $post_id ) ) ) {
 			$thumbfile = str_replace( wp_basename( $file ), $meta['thumb'], $file );
 
 			if ( ! empty( $thumbfile ) ) {

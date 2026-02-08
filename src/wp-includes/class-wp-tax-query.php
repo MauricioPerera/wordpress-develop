@@ -429,7 +429,7 @@ class WP_Tax_Query {
 				$join .= " ON ($this->primary_table.$this->primary_id_column = $alias.object_id)";
 			}
 
-			$where = "$alias.term_taxonomy_id $operator ($terms)";
+			$where = "$alias.term_id $operator ($terms)";
 
 		} elseif ( 'NOT IN' === $operator ) {
 
@@ -442,7 +442,7 @@ class WP_Tax_Query {
 			$where = "$this->primary_table.$this->primary_id_column NOT IN (
 				SELECT object_id
 				FROM $wpdb->term_relationships
-				WHERE term_taxonomy_id IN ($terms)
+				WHERE term_id IN ($terms)
 			)";
 
 		} elseif ( 'AND' === $operator ) {
@@ -458,7 +458,7 @@ class WP_Tax_Query {
 			$where = "(
 				SELECT COUNT(1)
 				FROM $wpdb->term_relationships
-				WHERE term_taxonomy_id IN ($terms)
+				WHERE term_id IN ($terms)
 				AND object_id = $this->primary_table.$this->primary_id_column
 			) = $num_terms";
 
@@ -468,9 +468,9 @@ class WP_Tax_Query {
 				"$operator (
 					SELECT 1
 					FROM $wpdb->term_relationships
-					INNER JOIN $wpdb->term_taxonomy
-					ON $wpdb->term_taxonomy.term_taxonomy_id = $wpdb->term_relationships.term_taxonomy_id
-					WHERE $wpdb->term_taxonomy.taxonomy = %s
+					INNER JOIN $wpdb->terms
+					ON $wpdb->terms.term_id = $wpdb->term_relationships.term_id
+					WHERE $wpdb->terms.taxonomy = %s
 					AND $wpdb->term_relationships.object_id = $this->primary_table.$this->primary_id_column
 				)",
 				$clause['taxonomy']
@@ -545,12 +545,12 @@ class WP_Tax_Query {
 	 */
 	private function clean_query( &$query ) {
 		if ( empty( $query['taxonomy'] ) ) {
-			if ( 'term_taxonomy_id' !== $query['field'] ) {
+			if ( 'term_taxonomy_id' !== $query['field'] && 'term_id' !== $query['field'] ) {
 				$query = new WP_Error( 'invalid_taxonomy', __( 'Invalid taxonomy.' ) );
 				return;
 			}
 
-			// So long as there are shared terms, 'include_children' requires that a taxonomy is set.
+			// Without a taxonomy, 'include_children' cannot be applied.
 			$query['include_children'] = false;
 		} elseif ( ! taxonomy_exists( $query['taxonomy'] ) ) {
 			$query = new WP_Error( 'invalid_taxonomy', __( 'Invalid taxonomy.' ) );
@@ -578,7 +578,7 @@ class WP_Tax_Query {
 			$query['terms'] = $children;
 		}
 
-		$this->transform_query( $query, 'term_taxonomy_id' );
+		$this->transform_query( $query, 'term_id' );
 	}
 
 	/**
@@ -629,7 +629,8 @@ class WP_Tax_Query {
 				$args['name'] = $terms;
 				break;
 			case 'term_taxonomy_id':
-				$args['term_taxonomy_id'] = $terms;
+				// Backward compat: term_taxonomy_id is now term_id.
+				$args['include'] = wp_parse_id_list( $terms );
 				break;
 			default:
 				$args['include'] = wp_parse_id_list( $terms );

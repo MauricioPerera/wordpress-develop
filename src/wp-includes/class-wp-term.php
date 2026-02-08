@@ -125,46 +125,14 @@ final class WP_Term {
 
 		// If there isn't a cached version, hit the database.
 		if ( ! $_term || ( $taxonomy && $taxonomy !== $_term->taxonomy ) ) {
-			// Any term found in the cache is not a match, so don't use it.
-			$_term = false;
+			$_term = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $wpdb->terms WHERE term_id = %d", $term_id ) );
 
-			// Grab all matching terms, in case any are shared between taxonomies.
-			$terms = $wpdb->get_results( $wpdb->prepare( "SELECT t.*, tt.* FROM $wpdb->terms AS t INNER JOIN $wpdb->term_taxonomy AS tt ON t.term_id = tt.term_id WHERE t.term_id = %d", $term_id ) );
-			if ( ! $terms ) {
+			if ( ! $_term ) {
 				return false;
 			}
 
-			// If a taxonomy was specified, find a match.
-			if ( $taxonomy ) {
-				foreach ( $terms as $match ) {
-					if ( $taxonomy === $match->taxonomy ) {
-						$_term = $match;
-						break;
-					}
-				}
-
-				// If only one match was found, it's the one we want.
-			} elseif ( 1 === count( $terms ) ) {
-				$_term = reset( $terms );
-
-				// Otherwise, the term must be shared between taxonomies.
-			} else {
-				// If the term is shared only with invalid taxonomies, return the one valid term.
-				foreach ( $terms as $t ) {
-					if ( ! taxonomy_exists( $t->taxonomy ) ) {
-						continue;
-					}
-
-					// Only hit if we've already identified a term in a valid taxonomy.
-					if ( $_term ) {
-						return new WP_Error( 'ambiguous_term_id', __( 'Term ID is shared between multiple taxonomies' ), $term_id );
-					}
-
-					$_term = $t;
-				}
-			}
-
-			if ( ! $_term ) {
+			// If a taxonomy was specified, verify it matches.
+			if ( $taxonomy && $taxonomy !== $_term->taxonomy ) {
 				return false;
 			}
 
@@ -173,12 +141,12 @@ final class WP_Term {
 				return new WP_Error( 'invalid_taxonomy', __( 'Invalid taxonomy.' ) );
 			}
 
+			// Backward compat: term_taxonomy_id = term_id.
+			$_term->term_taxonomy_id = $_term->term_id;
+
 			$_term = sanitize_term( $_term, $_term->taxonomy, 'raw' );
 
-			// Don't cache terms that are shared between taxonomies.
-			if ( 1 === count( $terms ) ) {
-				wp_cache_add( $term_id, $_term, 'terms' );
-			}
+			wp_cache_add( $term_id, $_term, 'terms' );
 		}
 
 		$term_obj = new WP_Term( $_term );
@@ -198,6 +166,9 @@ final class WP_Term {
 		foreach ( get_object_vars( $term ) as $key => $value ) {
 			$this->$key = $value;
 		}
+
+		// Backward compat: term_taxonomy_id always mirrors term_id.
+		$this->term_taxonomy_id = $this->term_id;
 	}
 
 	/**

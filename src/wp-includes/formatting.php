@@ -4855,7 +4855,7 @@ function sanitize_option( $option, $value ) {
 	switch ( $option ) {
 		case 'admin_email':
 		case 'new_admin_email':
-			$value = $wpdb->strip_invalid_text_for_column( $wpdb->options, 'option_value', $value );
+			$value = $wpdb->strip_invalid_text_for_column( $wpdb->settings, 'value', $value );
 			if ( is_wp_error( $value ) ) {
 				$error = $value->get_error_message();
 			} else {
@@ -4913,9 +4913,9 @@ function sanitize_option( $option, $value ) {
 
 		case 'blogdescription':
 		case 'blogname':
-			$value = $wpdb->strip_invalid_text_for_column( $wpdb->options, 'option_value', $value );
+			$value = $wpdb->strip_invalid_text_for_column( $wpdb->settings, 'value', $value );
 			if ( $value !== $original_value ) {
-				$value = $wpdb->strip_invalid_text_for_column( $wpdb->options, 'option_value', wp_encode_emoji( $original_value ) );
+				$value = $wpdb->strip_invalid_text_for_column( $wpdb->settings, 'value', wp_encode_emoji( $original_value ) );
 			}
 
 			if ( is_wp_error( $value ) ) {
@@ -4948,7 +4948,7 @@ function sanitize_option( $option, $value ) {
 		case 'mailserver_login':
 		case 'mailserver_pass':
 		case 'upload_path':
-			$value = $wpdb->strip_invalid_text_for_column( $wpdb->options, 'option_value', $value );
+			$value = $wpdb->strip_invalid_text_for_column( $wpdb->settings, 'value', $value );
 			if ( is_wp_error( $value ) ) {
 				$error = $value->get_error_message();
 			} else {
@@ -4973,7 +4973,7 @@ function sanitize_option( $option, $value ) {
 			break;
 
 		case 'siteurl':
-			$value = $wpdb->strip_invalid_text_for_column( $wpdb->options, 'option_value', $value );
+			$value = $wpdb->strip_invalid_text_for_column( $wpdb->settings, 'value', $value );
 			if ( is_wp_error( $value ) ) {
 				$error = $value->get_error_message();
 			} else {
@@ -4986,7 +4986,7 @@ function sanitize_option( $option, $value ) {
 			break;
 
 		case 'home':
-			$value = $wpdb->strip_invalid_text_for_column( $wpdb->options, 'option_value', $value );
+			$value = $wpdb->strip_invalid_text_for_column( $wpdb->settings, 'value', $value );
 			if ( is_wp_error( $value ) ) {
 				$error = $value->get_error_message();
 			} else {
@@ -5009,7 +5009,7 @@ function sanitize_option( $option, $value ) {
 			break;
 
 		case 'illegal_names':
-			$value = $wpdb->strip_invalid_text_for_column( $wpdb->options, 'option_value', $value );
+			$value = $wpdb->strip_invalid_text_for_column( $wpdb->settings, 'value', $value );
 			if ( is_wp_error( $value ) ) {
 				$error = $value->get_error_message();
 			} else {
@@ -5027,7 +5027,7 @@ function sanitize_option( $option, $value ) {
 
 		case 'limited_email_domains':
 		case 'banned_email_domains':
-			$value = $wpdb->strip_invalid_text_for_column( $wpdb->options, 'option_value', $value );
+			$value = $wpdb->strip_invalid_text_for_column( $wpdb->settings, 'value', $value );
 			if ( is_wp_error( $value ) ) {
 				$error = $value->get_error_message();
 			} else {
@@ -5059,7 +5059,7 @@ function sanitize_option( $option, $value ) {
 		case 'permalink_structure':
 		case 'category_base':
 		case 'tag_base':
-			$value = $wpdb->strip_invalid_text_for_column( $wpdb->options, 'option_value', $value );
+			$value = $wpdb->strip_invalid_text_for_column( $wpdb->settings, 'value', $value );
 			if ( is_wp_error( $value ) ) {
 				$error = $value->get_error_message();
 			} else {
@@ -5086,7 +5086,7 @@ function sanitize_option( $option, $value ) {
 
 		case 'moderation_keys':
 		case 'disallowed_keys':
-			$value = $wpdb->strip_invalid_text_for_column( $wpdb->options, 'option_value', $value );
+			$value = $wpdb->strip_invalid_text_for_column( $wpdb->settings, 'value', $value );
 			if ( is_wp_error( $value ) ) {
 				$error = $value->get_error_message();
 			} else {

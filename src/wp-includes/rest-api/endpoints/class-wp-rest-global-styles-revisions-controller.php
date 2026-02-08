@@ -166,62 +166,45 @@ class WP_REST_Global_Styles_Revisions_Controller extends WP_REST_Revisions_Contr
 		$is_head_request = $request->is_method( 'HEAD' );
 
 		if ( wp_revisions_enabled( $parent ) ) {
+			global $wpdb;
+
 			$registered = $this->get_collection_params();
-			$query_args = array(
-				'post_parent'    => $parent->ID,
-				'post_type'      => 'revision',
-				'post_status'    => 'inherit',
-				'posts_per_page' => -1,
-				'orderby'        => 'date ID',
-				'order'          => 'DESC',
+			$per_page   = isset( $registered['per_page'], $request['per_page'] ) ? (int) $request['per_page'] : -1;
+			$page       = isset( $registered['page'], $request['page'] ) ? (int) $request['page'] : 1;
+			$offset     = isset( $registered['offset'], $request['offset'] ) ? (int) $request['offset'] : 0;
+
+			// Count total revisions.
+			$total_revisions = (int) $wpdb->get_var( $wpdb->prepare(
+				"SELECT COUNT(*) FROM $wpdb->revisions WHERE post_id = %d",
+				$parent->ID
+			) );
+
+			// Build query.
+			$sql = $wpdb->prepare(
+				"SELECT * FROM $wpdb->revisions WHERE post_id = %d ORDER BY created_at_gmt DESC, id DESC",
+				$parent->ID
 			);
 
-			$parameter_mappings = array(
-				'offset'   => 'offset',
-				'page'     => 'paged',
-				'per_page' => 'posts_per_page',
-			);
-
-			foreach ( $parameter_mappings as $api_param => $wp_param ) {
-				if ( isset( $registered[ $api_param ], $request[ $api_param ] ) ) {
-					$query_args[ $wp_param ] = $request[ $api_param ];
+			if ( $per_page > 0 ) {
+				if ( $offset ) {
+					$sql .= $wpdb->prepare( ' LIMIT %d, %d', $offset, $per_page );
+				} else {
+					$sql .= $wpdb->prepare( ' LIMIT %d, %d', ( $page - 1 ) * $per_page, $per_page );
 				}
-			}
-
-			if ( $is_head_request ) {
-				// Force the 'fields' argument. For HEAD requests, only post IDs are required to calculate pagination.
-				$query_args['fields'] = 'ids';
-				// Disable priming post meta for HEAD requests to improve performance.
-				$query_args['update_post_term_cache'] = false;
-				$query_args['update_post_meta_cache'] = false;
-			}
-
-			$revisions_query = new WP_Query();
-			$revisions       = $revisions_query->query( $query_args );
-			$offset          = isset( $query_args['offset'] ) ? (int) $query_args['offset'] : 0;
-			$page            = isset( $query_args['paged'] ) ? (int) $query_args['paged'] : 0;
-			$total_revisions = $revisions_query->found_posts;
-
-			if ( $total_revisions < 1 ) {
-				// Out-of-bounds, run the query without pagination/offset to get the total count.
-				unset( $query_args['paged'], $query_args['offset'] );
-
-				$count_query                          = new WP_Query();
-				$query_args['fields']                 = 'ids';
-				$query_args['posts_per_page']         = 1;
-				$query_args['update_post_meta_cache'] = false;
-				$query_args['update_post_term_cache'] = false;
-
-				$count_query->query( $query_args );
-
-				$total_revisions = $count_query->found_posts;
-			}
-
-			if ( $revisions_query->query_vars['posts_per_page'] > 0 ) {
-				$max_pages = (int) ceil( $total_revisions / (int) $revisions_query->query_vars['posts_per_page'] );
+				$max_pages = (int) ceil( $total_revisions / $per_page );
 			} else {
 				$max_pages = $total_revisions > 0 ? 1 : 0;
 			}
+
+			$rows      = $wpdb->get_results( $sql );
+			$revisions = array();
+
+			if ( $rows ) {
+				foreach ( $rows as $row ) {
+					$revisions[] = _wp_revision_row_to_post( $row );
+				}
+			}
+
 			if ( $total_revisions > 0 ) {
 				if ( $offset >= $total_revisions ) {
 					return new WP_Error(

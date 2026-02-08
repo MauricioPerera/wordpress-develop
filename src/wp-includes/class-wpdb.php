@@ -292,13 +292,15 @@ class wpdb {
 		'posts',
 		'comments',
 		'links',
-		'options',
+		'settings',
+		'transients',
 		'postmeta',
+		'attachment_data',
+		'revisions',
 		'terms',
-		'term_taxonomy',
 		'term_relationships',
-		'termmeta',
-		'commentmeta',
+		'menus',
+		'menu_items',
 	);
 
 	/**
@@ -378,13 +380,28 @@ class wpdb {
 	public $links;
 
 	/**
-	 * WordPress Options table.
+	 * WordPress Settings table.
 	 *
-	 * @since 1.5.0
+	 * Replaces the legacy wp_options table. Stores all configuration options
+	 * without the autoload column — all settings are always loaded.
+	 *
+	 * @since 7.0.0
 	 *
 	 * @var string
 	 */
-	public $options;
+	public $settings;
+
+	/**
+	 * WordPress Transients table.
+	 *
+	 * Stores temporary cached data with optional expiration.
+	 * Separated from settings for performance.
+	 *
+	 * @since 7.0.0
+	 *
+	 * @var string
+	 */
+	public $transients;
 
 	/**
 	 * WordPress Post Metadata table.
@@ -394,6 +411,24 @@ class wpdb {
 	 * @var string
 	 */
 	public $postmeta;
+
+	/**
+	 * WordPress Attachment Data table (supplementary to posts).
+	 *
+	 * @since 7.0.0
+	 *
+	 * @var string
+	 */
+	public $attachment_data;
+
+	/**
+	 * WordPress Revisions table.
+	 *
+	 * @since 7.0.0
+	 *
+	 * @var string
+	 */
+	public $revisions;
 
 	/**
 	 * WordPress Posts table.
@@ -423,22 +458,42 @@ class wpdb {
 	public $term_relationships;
 
 	/**
-	 * WordPress Term Taxonomy table.
+	 * WordPress Term Taxonomy table (backward-compat alias for $terms).
 	 *
 	 * @since 2.3.0
+	 * @deprecated Schema merged into wp_terms in Phase 2.
 	 *
 	 * @var string
 	 */
 	public $term_taxonomy;
 
 	/**
-	 * WordPress Term Meta table.
+	 * WordPress Term Meta table (removed — core does not store term meta).
 	 *
 	 * @since 4.4.0
+	 * @deprecated Removed in Phase 2.
 	 *
 	 * @var string
 	 */
 	public $termmeta;
+
+	/**
+	 * WordPress Navigation Menus table.
+	 *
+	 * @since 7.0.0
+	 *
+	 * @var string
+	 */
+	public $menus;
+
+	/**
+	 * WordPress Navigation Menu Items table.
+	 *
+	 * @since 7.0.0
+	 *
+	 * @var string
+	 */
+	public $menu_items;
 
 	//
 	// Global and Multisite tables
@@ -1027,6 +1082,18 @@ class wpdb {
 			foreach ( $this->tables( 'old' ) as $table => $prefixed_table ) {
 				$this->$table = $prefixed_table;
 			}
+
+			// Backward compatibility alias: $wpdb->options → $wpdb->settings.
+			$this->options = $this->settings;
+
+			// Backward compatibility alias: $wpdb->term_taxonomy → $wpdb->terms.
+			$this->term_taxonomy = $this->terms;
+
+			// Backward compatibility: $wpdb->termmeta points to prefixed table name (table removed).
+			$this->termmeta = $this->prefix . 'termmeta';
+
+			// Backward compatibility: $wpdb->commentmeta points to prefixed table name (table removed).
+			$this->commentmeta = $this->prefix . 'commentmeta';
 		}
 		return $old_prefix;
 	}

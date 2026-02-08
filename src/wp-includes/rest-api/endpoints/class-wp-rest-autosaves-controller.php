@@ -247,7 +247,7 @@ class WP_REST_Autosaves_Controller extends WP_REST_Revisions_Controller {
 			return $autosave_id;
 		}
 
-		$autosave = get_post( $autosave_id );
+		$autosave = _wp_get_revision( $autosave_id );
 		$request->set_param( 'context', 'edit' );
 
 		$response = $this->prepare_item_for_response( $autosave, $request );
@@ -409,16 +409,34 @@ class WP_REST_Autosaves_Controller extends WP_REST_Revisions_Controller {
 		}
 
 		if ( $old_autosave ) {
+			global $wpdb;
+
 			$new_autosave['ID']          = $old_autosave->ID;
 			$new_autosave['post_author'] = $user_id;
 
 			/** This filter is documented in wp-admin/post.php */
 			do_action( 'wp_creating_autosave', $new_autosave );
 
-			// wp_update_post() expects escaped array.
-			$revision_id = wp_update_post( wp_slash( $new_autosave ) );
+			// Update the existing autosave in wp_revisions.
+			$wpdb->update(
+				$wpdb->revisions,
+				array(
+					'author_id'      => $user_id,
+					'title'          => $new_autosave['post_title'] ?? '',
+					'content'        => $new_autosave['post_content'] ?? '',
+					'excerpt'        => $new_autosave['post_excerpt'] ?? '',
+					'created_at'     => current_time( 'mysql' ),
+					'created_at_gmt' => current_time( 'mysql', 1 ),
+				),
+				array( 'id' => $old_autosave->ID ),
+				array( '%d', '%s', '%s', '%s', '%s', '%s' ),
+				array( '%d' )
+			);
+			wp_cache_delete( $old_autosave->ID, 'revisions' );
+			$revision_id = $old_autosave->ID;
 		} else {
 			// Create the new autosave as a special post revision.
+			$post_data['post_author'] = $user_id;
 			$revision_id = _wp_put_post_revision( $post_data, true );
 		}
 

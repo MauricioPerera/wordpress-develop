@@ -85,6 +85,14 @@ class WP_Query {
 	public $request;
 
 	/**
+	 * SQL for the count query (replaces SQL_CALC_FOUND_ROWS).
+	 *
+	 * @since 7.0.0
+	 * @var ?string
+	 */
+	public $count_request;
+
+	/**
 	 * Array of post objects or post IDs.
 	 *
 	 * @since 1.5.0
@@ -1448,8 +1456,6 @@ class WP_Query {
 			}
 		}
 
-		$n                                  = ! empty( $query_vars['exact'] ) ? '' : '%';
-		$searchand                          = '';
 		$query_vars['search_orderby_title'] = array();
 
 		$default_search_columns = array( 'post_title', 'post_excerpt', 'post_content' );
@@ -1488,6 +1494,83 @@ class WP_Query {
 		 */
 		$exclusion_prefix = apply_filters( 'wp_query_search_exclusion_prefix', '-' );
 
+		/*
+		 * Use FULLTEXT search when all three default columns are searched and not in exact mode.
+		 * The FULLTEXT index covers (post_title, post_content, post_excerpt).
+		 */
+		$sorted_search  = $search_columns;
+		$sorted_default = $default_search_columns;
+		sort( $sorted_search );
+		sort( $sorted_default );
+		$use_fulltext = ( $sorted_search === $sorted_default ) && empty( $query_vars['exact'] );
+
+		if ( $use_fulltext ) {
+			$fulltext_cols = "{$wpdb->posts}.post_title, {$wpdb->posts}.post_content, {$wpdb->posts}.post_excerpt";
+
+			// Build BOOLEAN MODE query string.
+			$boolean_parts = array();
+			foreach ( $query_vars['search_terms'] as $term ) {
+				$exclude = $exclusion_prefix && str_starts_with( $term, $exclusion_prefix );
+				if ( $exclude ) {
+					$term = substr( $term, 1 );
+				}
+
+				// Strip BOOLEAN MODE special characters from the term itself.
+				$clean_term = preg_replace( '/[+\-><()~*"@]/', ' ', $term );
+				$clean_term = trim( $clean_term );
+
+				if ( '' === $clean_term ) {
+					continue;
+				}
+
+				if ( $exclude ) {
+					$boolean_parts[] = '-' . $clean_term;
+				} else {
+					$boolean_parts[] = '+' . $clean_term;
+				}
+			}
+
+			if ( ! empty( $query_vars['sentence'] ) ) {
+				$clean_s       = preg_replace( '/[+\-><()~*"@]/', ' ', $query_vars['s'] );
+				$boolean_query = '"' . trim( $clean_s ) . '"';
+			} else {
+				$boolean_query = implode( ' ', $boolean_parts );
+			}
+
+			if ( '' !== $boolean_query ) {
+				$search = $wpdb->prepare(
+					" AND MATCH($fulltext_cols) AGAINST(%s IN BOOLEAN MODE)", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+					$boolean_query
+				);
+
+				// Store relevance expression for search ordering.
+				$query_vars['fulltext_relevance'] = $wpdb->prepare(
+					"MATCH($fulltext_cols) AGAINST(%s)", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+					$query_vars['s']
+				);
+
+				// Handle attachment filename search: OR with LIKE on file_path.
+				if ( ! empty( $this->allow_query_attachment_by_filename ) ) {
+					$like   = '%' . $wpdb->esc_like( $query_vars['s'] ) . '%';
+					$search = $wpdb->prepare(
+						" AND (MATCH($fulltext_cols) AGAINST(%s IN BOOLEAN MODE) OR (sq1.file_path LIKE %s))", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+						$boolean_query,
+						$like
+					);
+				}
+
+				if ( ! is_user_logged_in() ) {
+					$search .= " AND ({$wpdb->posts}.post_password = '') ";
+				}
+			}
+
+			return $search;
+		}
+
+		// Fallback: LIKE-based search when FULLTEXT cannot be used (custom columns or exact mode).
+		$n         = ! empty( $query_vars['exact'] ) ? '' : '%';
+		$searchand = '';
+
 		foreach ( $query_vars['search_terms'] as $term ) {
 			// If there is an $exclusion_prefix, terms prefixed with it should be excluded.
 			$exclude = $exclusion_prefix && str_starts_with( $term, $exclusion_prefix );
@@ -1513,7 +1596,7 @@ class WP_Query {
 			}
 
 			if ( ! empty( $this->allow_query_attachment_by_filename ) ) {
-				$search_columns_parts['attachment'] = $wpdb->prepare( "(sq1.meta_value $like_op %s)", $like );
+				$search_columns_parts['attachment'] = $wpdb->prepare( "(sq1.file_path $like_op %s)", $like );
 			}
 
 			$search .= "$searchand(" . implode( " $andor_op ", $search_columns_parts ) . ')';
@@ -1629,6 +1712,12 @@ class WP_Query {
 	protected function parse_search_order( &$query_vars ) {
 		global $wpdb;
 
+		// Use FULLTEXT relevance score when available.
+		if ( ! empty( $query_vars['fulltext_relevance'] ) ) {
+			return $query_vars['fulltext_relevance'] . ' DESC';
+		}
+
+		// Fallback: LIKE-based ordering (used when FULLTEXT is not available).
 		if ( $query_vars['search_terms_count'] > 1 ) {
 			$num_terms = count( $query_vars['search_orderby_title'] );
 
@@ -2049,7 +2138,7 @@ class WP_Query {
 			$query_vars['page'] = is_scalar( $query_vars['page'] ) ? absint( trim( $query_vars['page'], '/' ) ) : 0;
 		}
 
-		// If true, forcibly turns off SQL_CALC_FOUND_ROWS even when limits are present.
+		// If true, forcibly turns off the count query even when limits are present.
 		if ( isset( $query_vars['no_found_rows'] ) ) {
 			$query_vars['no_found_rows'] = (bool) $query_vars['no_found_rows'];
 		} else {
@@ -2466,7 +2555,7 @@ class WP_Query {
 		$where .= $search . $whichauthor . $whichmimetype;
 
 		if ( ! empty( $this->allow_query_attachment_by_filename ) ) {
-			$join .= " LEFT JOIN {$wpdb->postmeta} AS sq1 ON ( {$wpdb->posts}.ID = sq1.post_id AND sq1.meta_key = '_wp_attached_file' )";
+			$join .= " LEFT JOIN {$wpdb->attachment_data} AS sq1 ON ( {$wpdb->posts}.ID = sq1.post_id )";
 		}
 
 		if ( ! empty( $this->meta_query->queries ) ) {
@@ -3165,9 +3254,21 @@ class WP_Query {
 			$orderby = 'ORDER BY ' . $orderby;
 		}
 
-		$found_rows = '';
+		// Build count query for pagination (replaces SQL_CALC_FOUND_ROWS).
 		if ( ! $query_vars['no_found_rows'] && ! empty( $limits ) ) {
-			$found_rows = 'SQL_CALC_FOUND_ROWS';
+			if ( ! empty( $groupby ) ) {
+				$this->count_request =
+					"SELECT COUNT(*) FROM (
+						SELECT 1 FROM {$wpdb->posts} $join
+						WHERE 1=1 $where
+						$groupby
+					) AS count_tbl";
+			} else {
+				$this->count_request =
+					"SELECT COUNT($distinct {$wpdb->posts}.ID)
+						FROM {$wpdb->posts} $join
+						WHERE 1=1 $where";
+			}
 		}
 
 		/*
@@ -3182,7 +3283,7 @@ class WP_Query {
 		 * See https://github.com/WordPress/wordpress-develop/pull/6393#issuecomment-2088217429
 		 */
 		$old_request =
-			"SELECT $found_rows $distinct $fields
+			"SELECT $distinct $fields
 					 FROM {$wpdb->posts} $join
 					 WHERE 1=1 $where
 					 $groupby
@@ -3404,7 +3505,7 @@ class WP_Query {
 
 				// Beginning of the string is on a new line to prevent leading whitespace. See https://core.trac.wordpress.org/ticket/56841.
 				$this->request =
-					"SELECT $found_rows $distinct {$wpdb->posts}.ID
+					"SELECT $distinct {$wpdb->posts}.ID
 					 FROM {$wpdb->posts} $join
 					 WHERE 1=1 $where
 					 $groupby
@@ -3684,7 +3785,7 @@ class WP_Query {
 			return;
 		}
 
-		if ( ! empty( $limits ) ) {
+		if ( ! empty( $limits ) && ! empty( $this->count_request ) ) {
 			/**
 			 * Filters the query to run for retrieving the found posts.
 			 *
@@ -3693,7 +3794,7 @@ class WP_Query {
 			 * @param string   $found_posts_query The query to run to find the found posts.
 			 * @param WP_Query $query             The WP_Query instance (passed by reference).
 			 */
-			$found_posts_query = apply_filters_ref_array( 'found_posts_query', array( 'SELECT FOUND_ROWS()', &$this ) );
+			$found_posts_query = apply_filters_ref_array( 'found_posts_query', array( $this->count_request, &$this ) );
 
 			$this->found_posts = (int) $wpdb->get_var( $found_posts_query );
 		} else {
